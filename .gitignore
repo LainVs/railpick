@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# 本项目运行时数据（用户本地再生，不进库）
+timetable.db
+timetable.db-journal
+timetable.db-wal
+timetable.db-shm
+config.json
+hist.json
+*.log
+probe*.txt
+*_dump.txt
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

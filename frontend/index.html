@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>铁行择优 RailPick · 高铁与普速的中间值</title>
+<style>
+:root{
+  --paper:#F5EFE1; --paper2:#EFE6D2; --ink:#1B211F; --muted:#6B6F6A;
+  --rail:#0E3B2E; --rail2:#14503D; --signal:#FF5A1F; --gold:#C9A227;
+  --card:#FFFDF6; --line:#D9CFB6; --ok:#1A7F4D; --warn:#B7791F;
+  --mono:"JetBrains Mono","SF Mono",Consolas,monospace;
+  --serif:"Noto Serif SC",serif; --sans:"Noto Sans SC",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  background-image:repeating-linear-gradient(0deg,transparent 0 28px,rgba(14,59,46,.05) 28px 29px);}
+a{color:inherit}
+.topbar{background:var(--rail);color:#F5EFE1;padding:14px 22px;display:flex;align-items:center;gap:16px;
+  border-bottom:4px solid var(--gold);position:sticky;top:0;z-index:20}
+.logo{font-family:var(--serif);font-weight:900;font-size:22px;letter-spacing:2px}
+.logo small{font-family:var(--mono);font-weight:400;font-size:11px;letter-spacing:3px;opacity:.8;display:block}
+.status{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;font-family:var(--mono)}
+.dot{width:10px;height:10px;border-radius:50%;background:#7ee2a8;box-shadow:0 0 8px #7ee2a8}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 18px 60px}
+.board{background:var(--card);border:2px solid var(--ink);border-radius:14px;box-shadow:6px 6px 0 var(--ink);overflow:hidden}
+.board-head{background:var(--ink);color:var(--paper);padding:10px 18px;font-family:var(--mono);font-size:12px;letter-spacing:2px;display:flex;justify-content:space-between}
+.search{display:grid;grid-template-columns:1fr 40px 1fr 130px 120px 120px 120px 120px 110px;gap:10px;padding:16px 18px;background:linear-gradient(180deg,#FFFDF6,#F3EAD3)}
+.field label{display:block;font-size:11px;letter-spacing:2px;color:var(--muted);margin-bottom:6px}
+.field input,.field select{width:100%;padding:11px 12px;border:2px solid var(--ink);border-radius:10px;font-size:15px;background:#fff;font-family:var(--sans)}
+.field input:focus{outline:3px solid var(--gold)}
+.swap{align-self:end;height:46px;border:2px solid var(--ink);border-radius:10px;background:var(--gold);font-size:18px;cursor:pointer}
+.go{align-self:end;height:46px;border:2px solid var(--ink);border-radius:10px;background:var(--signal);color:#fff;font-weight:800;font-size:15px;cursor:pointer;box-shadow:3px 3px 0 var(--ink)}
+.go:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+.adv{display:flex;gap:14px;flex-wrap:wrap;padding:0 18px 16px;background:#F3EAD3;font-size:13px;color:#3d443f}
+.adv label{display:flex;align-items:center;gap:6px}
+.adv input{width:64px;padding:6px 8px;border:1.5px solid var(--ink);border-radius:8px}
+.main{display:grid;grid-template-columns:280px 1fr;gap:16px;margin-top:16px}
+.filters{background:var(--card);border:2px solid var(--ink);border-radius:14px;box-shadow:5px 5px 0 var(--ink);padding:16px;height:fit-content;position:sticky;top:86px}
+.filters h3{margin:0 0 4px;font-family:var(--serif);font-size:16px}
+.fgroup{border-top:1px dashed var(--line);padding:12px 0}
+.fgroup:first-of-type{border-top:0}
+.fgroup .t{font-size:12px;letter-spacing:1px;color:var(--muted);margin-bottom:8px}
+input[type=range]{width:100%;accent-color:var(--signal)}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{border:1.5px solid var(--ink);border-radius:999px;padding:5px 11px;font-size:12px;cursor:pointer;background:#fff;user-select:none}
+.chip.on{background:var(--rail);color:#fff}
+select.sort{width:100%;padding:9px;border:2px solid var(--ink);border-radius:10px}
+.results{min-width:0}
+.bench{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
+.bcard{background:var(--rail);color:#F5EFE1;border:2px solid var(--ink);border-radius:12px;padding:13px 14px;box-shadow:4px 4px 0 var(--ink);position:relative;overflow:hidden}
+.bcard.mid{background:#fff;color:var(--ink);border-color:var(--signal)}
+.bcard .k{font-size:11px;letter-spacing:2px;opacity:.75;font-family:var(--mono)}
+.bcard .v{font-family:var(--serif);font-size:20px;font-weight:900;margin:6px 0}
+.bcard .s{font-size:12px;font-family:var(--mono);opacity:.85}
+.starmap{background:var(--ink);color:var(--paper);border:2px solid var(--ink);border-radius:14px;box-shadow:5px 5px 0 rgba(0,0,0,.35);padding:14px 16px;margin-bottom:12px}
+.starmap h4{margin:0 0 2px;font-family:var(--serif);letter-spacing:1px}
+.starmap p{margin:0 0 10px;font-size:12px;opacity:.7}
+#scatter{width:100%;height:250px;background:#101614;border:1px solid #2b3532;border-radius:10px;cursor:crosshair}
+.legend{display:flex;gap:14px;font-size:12px;font-family:var(--mono);margin-top:8px;opacity:.9}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+.cards{display:flex;flex-direction:column;gap:12px}
+.card{background:var(--card);border:2px solid var(--ink);border-radius:14px;box-shadow:5px 5px 0 var(--ink);padding:14px 16px}
+.card.sel{outline:3px solid var(--signal)}
+.card-top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.price{font-family:var(--serif);font-size:26px;font-weight:900;color:var(--rail)}
+.price small{font-size:12px;color:var(--muted);font-family:var(--sans)}
+.dur{font-family:var(--mono);font-size:13px;background:var(--ink);color:#fff;padding:3px 9px;border-radius:999px}
+.tag{font-size:11px;border:1.5px solid var(--ink);border-radius:999px;padding:2px 9px;background:#fff}
+.tag.hot{background:var(--signal);color:#fff;border-color:var(--ink)}
+.tag.green{background:#DFF3E6}
+.save{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--ok)}
+.timeline{display:flex;align-items:stretch;gap:0;margin:12px 0 8px;border:2px solid var(--ink);border-radius:10px;overflow:hidden}
+.seg{padding:9px 10px;font-size:12px;line-height:1.5;min-width:0}
+.seg.g{background:#0E3B2E;color:#F5EFE1}
+.seg.k{background:#E8E0C8;color:#1B211F}
+.seg.d{background:#2E6E55;color:#fff}
+.seg.wait{background:repeating-linear-gradient(45deg,#fff 0 6px,#F0D9A8 6px 12px);color:#5a4a1f;font-family:var(--mono);display:flex;align-items:center;justify-content:center;font-size:11px;min-width:86px}
+.seg b{font-family:var(--mono);font-size:14px}
+.meta{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);font-family:var(--mono)}
+.buy{margin-top:10px;background:#FFF7DB;border:1.5px dashed var(--warn);border-radius:10px;padding:9px 12px;font-size:12.5px;display:none}
+.card.open .buy{display:block}
+.btnrow{display:flex;gap:8px;margin-top:10px}
+.btn{border:2px solid var(--ink);border-radius:9px;padding:7px 13px;font-size:13px;cursor:pointer;background:#fff;box-shadow:2px 2px 0 var(--ink)}
+.btn.primary{background:var(--rail);color:#fff}
+.empty{background:#fff;border:2px dashed var(--ink);border-radius:12px;padding:26px;text-align:center;color:var(--muted)}
+.loading{padding:26px;text-align:center;font-family:var(--mono)}
+.prog{background:#fff;border:2px solid var(--ink);border-radius:12px;padding:20px 22px}
+.prog .bar{height:22px;border:2px solid var(--ink);border-radius:999px;overflow:hidden;background:#EFE6D2}
+.prog .fill{height:100%;width:0%;border-radius:999px;transition:width .5s;
+  background:repeating-linear-gradient(45deg,var(--signal) 0 12px,#d14a12 12px 24px);
+  background-size:34px 100%;animation:slide 1s linear infinite}
+@keyframes slide{to{background-position:34px 0}}
+.prog .prow{display:flex;align-items:center;gap:10px;margin-top:10px;font-family:var(--mono);font-size:13px}
+.prog .pstage{flex:1}
+.prog .ppct{font-weight:800;min-width:44px;text-align:right}
+.sug{position:absolute;background:#fff;border:2px solid var(--ink);border-radius:10px;max-height:200px;overflow:auto;z-index:30;width:100%}
+.sug div{padding:8px 10px;cursor:pointer;font-size:14px}
+.sug div:hover{background:var(--gold)}
+.rel{position:relative}
+.hist{display:flex;gap:8px;flex-wrap:wrap;padding:0 18px 14px;background:#F3EAD3;font-size:12px;align-items:center;color:var(--muted)}
+.hist button{border:1.5px solid var(--ink);border-radius:999px;padding:3px 11px;font-size:12px;background:#fff;cursor:pointer}
+.hist button:hover{background:var(--gold)}
+.graphbar{display:flex;align-items:center;gap:10px;margin-top:12px;background:var(--card);border:2px solid var(--ink);border-radius:12px;box-shadow:4px 4px 0 var(--ink);padding:9px 14px;font-size:12.5px}
+.graphbar .gstats{font-family:var(--mono)}
+.graphbar .gmsg{flex:1;color:var(--muted);font-size:12px}
+.graphbar .gbar{width:130px;height:14px;border:1.5px solid var(--ink);border-radius:999px;overflow:hidden;background:#EFE6D2}
+.graphbar .gbar span{display:block;height:100%;width:0%;background:var(--rail);transition:width .5s}
+.graphbar .gbar span.ind{width:100%!important;background:repeating-linear-gradient(45deg,var(--rail) 0 12px,#2E6E55 12px 24px);background-size:34px 100%;animation:slide 1s linear infinite}
+@media(max-width:960px){.main{grid-template-columns:1fr}.filters{position:static}.search{grid-template-columns:1fr 1fr}.bench{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo">铁行择优<small>RAILPICK · 中转性价比</small></div>
+  <div class="status"><span class="dot" id="dot"></span><span id="health">12306 直连检测中…</span></div>
+</div>
+<div class="wrap">
+  <div class="board">
+    <div class="board-head"><span>DEPARTURES · 出发查询</span><span id="today"></span></div>
+    <div class="search">
+      <div class="field rel"><label>出发站 FROM</label><input id="from" value="北京" autocomplete="off"><div class="sug" id="sugFrom" hidden></div></div>
+      <button class="swap" id="swap" title="交换">⇄</button>
+      <div class="field rel"><label>到达站 TO</label><input id="to" value="上海" autocomplete="off"><div class="sug" id="sugTo" hidden></div></div>
+      <div class="field"><label>日期 DATE</label><input id="date" type="date"></div>
+      <div class="field"><label>换乘深度</label><select id="maxTransfer"><option value="0">仅直达</option><option value="1" selected>直达+1次中转</option><option value="2">直达+1~2次中转</option></select></div>
+      <div class="field"><label>指定中转（选填）</label><input id="mustMid" placeholder="如：太原" autocomplete="off"></div>
+      <div class="field"><label>搜索广度</label><select id="breadth"><option value="quick">快速(8站)</option><option value="normal" selected>标准(12站)</option><option value="deep">地毯式(20站·慢)</option></select></div>
+      <div class="field"><label>模式</label><select id="smode"><option value="live" selected>实时深查</option><option value="graph">图库深挖</option></select></div>
+      <button class="go" id="go">查询组合 →</button>
+    </div>
+    <div class="adv">
+      <label>最短换乘 <input id="minGap" type="number" value="20" min="0" max="300"> 分钟</label>
+      <label>最长等待 <input id="maxGap" type="number" value="240" min="30" max="1440"> 分钟</label>
+      <span>⚠ 仅做查询对比，购票请去 12306 分段购买或走“接续换乘” · 低频查询防封</span>
+    </div>
+    <div class="hist" id="hist" hidden>最近查过：</div>
+  </div>
+
+  <div class="graphbar">
+    <span>🗺 时刻表图</span>
+    <span class="gstats" id="gstats">加载中…</span>
+    <span class="gmsg" id="gmsg">越攒中转候选中转站越准（公开经停站，约4秒1次）</span>
+    <input id="gfrom" placeholder="优先站，如唐山，北京" style="width:130px;padding:5px 8px;border:1.5px solid var(--ink);border-radius:8px">
+    <select id="gphase" style="padding:5px 8px;border:1.5px solid var(--ink);border-radius:8px"><option value="auto">自动</option><option value="mesh">仅干线</option><option value="fanout">仅地级</option></select>
+    <input id="gmax" value="1000" title="限次，0=无限" style="width:64px;padding:5px 8px;border:1.5px solid var(--ink);border-radius:8px">
+    <span class="gbar"><span id="gfill"></span></span>
+    <button class="btn" id="gcrawl">一键爬取</button>
+    <button class="btn" id="gcancel" hidden>取消</button>
+  </div>
+
+  <div class="main">
+    <aside class="filters">
+      <h3>快速定位需求</h3>
+      <div style="font-size:12px;color:var(--muted)">拖滑杆找“中间值”：便宜与快的平衡点</div>
+      <div class="fgroup"><div class="t">最高接受总价 ¥<b id="pVal">不限</b></div><input type="range" id="maxPrice" min="50" max="5000" step="10" value="5000"></div>
+      <div class="fgroup"><div class="t">最长接受耗时 <b id="dVal">不限</b></div><input type="range" id="maxDur" min="120" max="4320" step="30" value="4320"></div>
+      <div class="fgroup"><div class="t">车型组合（核心：混搭找中间值）</div><div class="chips" id="kinds">
+        <span class="chip on" data-k="直达">直达</span><span class="chip on" data-k="全高铁">全高铁</span><span class="chip on" data-k="高铁+普速">高铁+普速</span><span class="chip on" data-k="全普速">全普速</span><span class="chip on" data-k="动车系">动车系</span>
+      </div></div>
+      <div class="fgroup"><div class="t">排序</div><select class="sort" id="sort"><option value="smart">智能推荐（省钱又省时）</option><option value="price">总价最低</option><option value="time">总耗时最短</option><option value="wait">换乘等待最短</option></select></div>
+      <div class="fgroup"><div class="t">换乘次数</div><div class="chips" id="trans"><span class="chip on" data-k="0">直达</span><span class="chip on" data-k="1">1次</span><span class="chip on" data-k="2">2次</span><span class="chip on" data-k="3">3次</span><span class="chip on" data-k="4">4次</span></div></div>
+      <div class="fgroup" id="graphOpts" hidden><div class="t">深挖设置（仅图库深挖）</div>
+        <div style="display:flex;gap:6px;align-items:center;font-size:12px;margin-bottom:6px">中转≤ <select id="gtrans"><option>1</option><option selected>2</option><option>3</option><option>4</option></select> 枚举 <input id="genum" value="300" style="width:52px;padding:6px;border:1.5px solid var(--ink);border-radius:8px"> 核验 <input id="vtop" value="40" style="width:44px;padding:6px;border:1.5px solid var(--ink);border-radius:8px"></div>
+        <label style="font-size:12px"><input type="checkbox" id="win" checked> 前后一天也看看</label>
+      </div>
+      <div class="fgroup"><div class="t">出发时段（首段发车）</div><div class="chips" id="dpart"><span class="chip on" data-k="0-6">凌晨</span><span class="chip on" data-k="6-12">上午</span><span class="chip on" data-k="12-18">下午</span><span class="chip on" data-k="18-24">晚上</span></div></div>
+      <div class="fgroup"><div class="t">精确时间（HH:MM，空=不限，可过夜如22:00-06:00）</div>
+        <div style="display:flex;gap:6px;align-items:center;font-size:12px;margin-bottom:6px">出发 <input id="depLo" placeholder="08:00" style="width:62px;padding:6px;border:1.5px solid var(--ink);border-radius:8px"> - <input id="depHi" placeholder="12:00" style="width:62px;padding:6px;border:1.5px solid var(--ink);border-radius:8px"></div>
+        <div style="display:flex;gap:6px;align-items:center;font-size:12px">到达 <input id="arrLo" placeholder="18:00" style="width:62px;padding:6px;border:1.5px solid var(--ink);border-radius:8px"> - <input id="arrHi" placeholder="22:00" style="width:62px;padding:6px;border:1.5px solid var(--ink);border-radius:8px"></div>
+      </div>
+      <div class="fgroup"><label style="font-size:13px"><input type="checkbox" id="onlyTicket" checked> 只看有票（余票非“--/无”）</label></div>
+      <div class="fgroup" style="font-size:12px;color:var(--muted)">中转站默认取直达车经停站交集（顺路不绕）+枢纽兜底；同城不同站自动+60分钟惩罚并标注。</div>
+    </aside>
+
+    <section class="results">
+      <div class="bench" id="bench" hidden>
+        <div class="bcard"><div class="k">FASTEST · 最快</div><div class="v" id="bFast">—</div><div class="s" id="bFastS"></div></div>
+        <div class="bcard mid"><div class="k">★ SWEET SPOT · 推荐中间值</div><div class="v" id="bMid">—</div><div class="s" id="bMidS"></div></div>
+        <div class="bcard"><div class="k">CHEAPEST · 最便宜</div><div class="v" id="bCheap">—</div><div class="s" id="bCheapS"></div></div>
+      </div>
+      <div class="starmap" id="starWrap" hidden>
+        <h4>价格 — 时间星图 ✦ 点击圆点定位方案</h4>
+        <p>横轴耗时 → / 纵轴价格 →，越靠近左下越“又快又便宜”。橙色=中转混搭，往往藏着中间值。</p>
+        <canvas id="scatter"></canvas>
+        <div class="legend"><span><i style="background:#7ee2a8"></i>直达</span><span><i style="background:#FF5A1F"></i>1次中转</span><span><i style="background:#6aa8ff"></i>2次中转</span><span id="count"></span></div>
+      </div>
+      <div class="cards" id="cards"><div class="empty">输入出发/到达+日期，点击「查询组合」。<br>示例：北京→上海 / 深圳→拉萨，试试“高铁+普速”混搭。</div></div>
+    </section>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const state={combos:[],filtered:[],cached:false,stale:false,mock:false,warn:''};
+const PRESALE_DAYS=15; // 12306 预售期 15 天，超期查也是空，直接拦
+function isoPlus(n){const d=new Date();d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)}
+function tomorrow(){return isoPlus(1)}
+$('date').value=tomorrow();
+$('date').min=isoPlus(0); $('date').max=isoPlus(PRESALE_DAYS);
+$('today').textContent=new Date().toLocaleDateString('zh-CN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+fetch('/api/health').then(r=>r.json()).then(()=>{$('health').textContent='12306 直连就绪 · 低频查询'}).catch(()=>{$('health').textContent='后端离线？请先启动服务'});
+loadGraphStats();
+
+// 时刻表图：一键爬取（后台任务，复用查询的进度接口轮询）
+let crawlTimer=null;
+async function loadGraphStats(){
+  try{
+    const s=await fetch('/api/graph/stats').then(r=>r.json());
+    if(s.trains!=null)$('gstats').textContent=`${s.trains}趟车 · ${s.stations}个站 · ${s.ods}轮OD`;
+  }catch(e){$('gstats').textContent='暂不可用'}
+}
+$('gcrawl').onclick=async()=>{
+  let gmax=parseInt(($('gmax').value||'').trim(),10);
+  if(!(gmax===0||(gmax>=10&&gmax<=5000))){alert('限次请填 0（无限）或 10~5000');return}
+  const gf=$('gfrom').value.trim();
+  const s=await fetch('/api/graph/crawl?max_requests='+gmax+'&from_stations='+encodeURIComponent(gf)+'&phase='+$('gphase').value,{method:'POST'}).then(r=>r.json()).catch(()=>({}));
+  if(!s.started){alert(s.reason||'启动失败');return}
+  const jid=s.job_id;
+  window._crawlJob=jid; window._crawlFree=(gmax===0);
+  let tickN=0;
+  $('gcrawl').hidden=true;$('gcancel').hidden=false;$('gfill').style.width='0%';$('gfill').classList.remove('ind');
+  if(crawlTimer)clearInterval(crawlTimer);
+  crawlTimer=setInterval(async()=>{
+    try{
+      const st=await fetch('/api/search/'+jid).then(r=>r.json());
+      if(window._crawlFree&&st.state==='running'){$('gfill').classList.add('ind')}
+      else{$('gfill').classList.remove('ind');$('gfill').style.width=(st.progress||0)+'%'}
+      $('gmsg').textContent=`${st.stage||'爬取中…'} ${window._crawlFree?'(无限模式)':(st.progress||0)+'%'}`;
+      if(st.state==='running'&&(++tickN%3===0))loadGraphStats(); // 图数字跟着涨，看得见在干活
+      if(st.state==='done'){clearInterval(crawlTimer);crawlTimer=null;window._crawlJob=null;
+        $('gcrawl').hidden=false;$('gcancel').hidden=true;$('gfill').classList.remove('ind');
+        const r=st.result||{};$('gmsg').textContent=`爬完：本次${r.requests||'?'}次请求，最快间隔${r.min_interval||'?'}秒、退避${r.backoffs||0}次，图里共${r.trains||'?'}趟车`;loadGraphStats()}
+      else if(st.state==='error'||st.state==='cancelled'){clearInterval(crawlTimer);crawlTimer=null;window._crawlJob=null;
+        $('gcrawl').hidden=false;$('gcancel').hidden=true;$('gfill').classList.remove('ind');$('gfill').style.width='0%';
+        $('gmsg').textContent='爬取结束：'+(st.error||st.state);loadGraphStats()}
+    }catch(e){}
+  },2000);
+};
+$('gcancel').onclick=async()=>{
+  if(window._crawlJob){try{await fetch('/api/search/'+window._crawlJob+'/cancel',{method:'POST'})}catch(e){}}
+};
+renderHist();
+
+// 站名联想
+function bindSug(inp,sug){
+  inp.addEventListener('input',async()=>{
+    const q=inp.value.trim(); if(!q){sug.hidden=true;return}
+    const r=await fetch('/api/stations?q='+encodeURIComponent(q)+'&limit=8').then(r=>r.json()).catch(()=>({stations:[]}));
+    if(!r.stations||!r.stations.length){sug.hidden=true;return}
+    sug.innerHTML=r.stations.map(s=>`<div data-n="${s.name}">${s.name} <span style="color:#888;font-size:12px">${s.code}</span></div>`).join('');
+    sug.hidden=false;
+    sug.querySelectorAll('div').forEach(d=>d.onclick=()=>{inp.value=d.dataset.n;sug.hidden=true});
+  });
+  document.addEventListener('click',e=>{if(!sug.contains(e.target)&&e.target!==inp)sug.hidden=true});
+}
+bindSug($('from'),$('sugFrom'));bindSug($('to'),$('sugTo'));
+$('swap').onclick=()=>{const a=$('from').value;$('from').value=$('to').value;$('to').value=a};
+
+// chips
+document.querySelectorAll('#kinds .chip,#trans .chip,#dpart .chip').forEach(c=>c.onclick=()=>{c.classList.toggle('on');applyFilters()});
+['maxPrice','maxDur','sort','onlyTicket','depLo','depHi','arrLo','arrHi'].forEach(id=>$(id).addEventListener('input',applyFilters));
+
+// 历史搜索（localStorage，最近 6 组，一点即查）
+function getHist(){try{return JSON.parse(localStorage.getItem('railpick_hist')||'[]')}catch(e){return[]}}
+function saveHist(f,t){try{let h=getHist().filter(x=>!(x[0]===f&&x[1]===t));h.unshift([f,t]);localStorage.setItem('railpick_hist',JSON.stringify(h.slice(0,6)))}catch(e){}renderHist()}
+function renderHist(){const h=getHist(),box=$('hist');if(!h.length){box.hidden=true;return}box.hidden=false;box.innerHTML='最近查过：'+h.map(x=>`<button data-f="${x[0]}" data-t="${x[1]}">${x[0]}→${x[1]}</button>`).join('');box.querySelectorAll('button').forEach(b=>b.onclick=()=>{$('from').value=b.dataset.f;$('to').value=b.dataset.t;query()})}
+
+$('go').onclick=query;
+$('smode').addEventListener('change',()=>{$('graphOpts').hidden=($('smode').value!=='graph')});
+let pollTimer=null, curJob=null, jobT0=0;
+async function query(){
+  const from=$('from').value.trim(),to=$('to').value.trim(),date=$('date').value;
+  if(!from||!to||!date){alert('请填写出发/到达/日期');return}
+  const breadth=$('breadth').value;
+  if(date>isoPlus(PRESALE_DAYS)){alert(`12306 预售期 ${PRESALE_DAYS} 天，${date} 还查不到，先换个近期的日期吧`);return}
+  if(date<isoPlus(0)){alert('日期已过去，换个今天或之后的日期吧');return}
+  stopPoll();
+  $('bench').hidden=true;$('starWrap').hidden=true;
+  const smode=$('smode').value;
+  $('graphOpts').hidden=(smode!=='graph');
+  $('cards').innerHTML=`<div class="prog"><div class="bar"><div class="fill" id="pfill"></div></div>
+    <div class="prow"><span class="pstage" id="pstage">正在提交任务…</span><span class="ppct" id="ppct"></span>
+    <button class="btn" id="pcancel">取消</button></div></div>`;
+  $('pcancel').onclick=cancelJob;
+  let endpoint, params;
+  const base=`from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&date=${date}&min_gap=${$('minGap').value}&max_gap=${$('maxGap').value}&must_middle=${encodeURIComponent($('mustMid').value.trim())}`;
+  if(smode==='graph'){
+    endpoint='/api/gsearch';
+    const genum=Math.max(10,Math.min(2000,parseInt($('genum').value)||300));
+    params=`${base}&max_transfers=${$('gtrans').value}&limit=${genum}&verify_top=${Math.max(5,Math.min(1000,parseInt($('vtop').value)||40))}&window=${$('win').checked?1:0}`;
+  }else{
+    endpoint='/api/search';
+    params=`${base}&max_transfer=${$('maxTransfer').value}&limit=40&with_price=1&breadth=${breadth}`;
+  }
+  try{
+    const s=await fetch(endpoint+'?'+params,{method:'POST'}).then(r=>r.json());
+    if(s.error||!s.job_id){$('cards').innerHTML=`<div class="empty">提交失败：${s.error||'未知错误'}<br><br><button class="btn primary" onclick="query()">重试 ⟳</button></div>`;return}
+    curJob=s.job_id; jobT0=Date.now();
+    pollTimer=setInterval(poll, 800);
+    poll();
+  }catch(e){$('cards').innerHTML=`<div class="empty">网络/后端异常：${e}<br>请确认已运行 uvicorn。</div>`}
+}
+async function poll(){
+  if(!curJob)return;
+  try{
+    const s=await fetch('/api/search/'+curJob).then(r=>r.json());
+    const el=Math.round((Date.now()-jobT0)/1000);
+    const fill=$('pfill'),st=$('pstage'),pc=$('ppct');
+    if(fill){fill.style.width=(s.progress||0)+'%'}
+    if(st){st.textContent=`${s.stage||'查询中…'}（已用${el}秒）`}
+    if(pc){pc.textContent=(s.progress||0)+'%'}
+    if(s.state==='done'){stopPoll();handleResult(s.result)}
+    else if(s.state==='error'){stopPoll();$('cards').innerHTML=`<div class="empty">查询失败：${s.error}<br><br><button class="btn primary" onclick="query()">30秒后重试 ⟳</button></div>`}
+    else if(s.state==='cancelled'){stopPoll();$('cards').innerHTML=`<div class="empty">已取消，可直接发起新查询。</div>`}
+  }catch(e){/* 下一轮继续 */}
+}
+function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null}curJob=null}
+async function cancelJob(){if(curJob){try{await fetch('/api/search/'+curJob+'/cancel',{method:'POST'})}catch(e){}}}
+function handleResult(r){
+  if(!r)return;
+  if(r.error&&(!r.combos||!r.combos.length)){$('cards').innerHTML=`<div class="empty">查询失败：${r.error}<br><br><button class="btn primary" onclick="query()">30秒后重试实时查询 ⟳</button></div>`;return}
+  const from=$('from').value.trim(),to=$('to').value.trim();
+  state.combos=r.combos||[];
+  state.mock=r.mock; state.warn=r.warn; state.cached=r.cached; state.stale=r.stale;
+  state.stats=r.stats||null; state.graph=r.graph||false;
+  state.graphCand=r.candidates; state.graphVer=r.verified; state.liveAdded=r.live_added||0;
+  state.shown=60;
+  if(!state.combos.length){$('cards').innerHTML='<div class="empty">无可行组合，试试放宽最长等待或换日期。</div>';return}
+  saveHist(from,to);
+  renderBench();applyFilters();
+  $('bench').hidden=false;$('starWrap').hidden=false;
+}
+window.query=query;
+
+function noticeBar(){
+  if(state.graph){const st=state.stats||{};const ex=state.liveAdded?`＋实时补${state.liveAdded}条`:'';return `<div class="empty" style="border-color:var(--rail);background:#EAF3EE">图库深挖：离线枚举${state.graphCand||'?'}条候选，实时核验${state.graphVer||'?'}条${ex}。</div>`}
+  if(state.stale) return `<div class="empty" style="border-color:var(--warn);background:#FFF7DB">⚠ 12306刚才繁忙：时刻为缓存数据，余票可能滞后。${state.warn||''}<br><br><button class="btn primary" onclick="query()">重试实时查询 ⟳</button></div>`;
+  if(state.cached) return `<div class="empty" style="border-color:var(--ok);background:#EAF7F0">✓ 命中本地缓存（2分钟内查过，免打扰12306），时刻余票均为实时缓存值。</div>`;
+  if(state.mock) return `<div class="empty" style="border-color:var(--signal)">12306限流中，当前为演示数据：${state.warn||''}<br><br><button class="btn primary" onclick="query()">重试实时查询 ⟳</button> <span style="font-size:12px">建议等30秒；频繁点会被继续限流。</span></div>`;
+  return '';
+}
+
+function hasTicket(c){
+  if(!$('onlyTicket').checked)return true;
+  return c.legs.every(l=>{
+    const s=l.seats||{};
+    return Object.values(s).some(v=>v&&v!=='--'&&v!=='无');
+  });
+}
+function applyFilters(){
+  const mp=+$('maxPrice').value, md=+$('maxDur').value;
+  $('pVal').textContent=mp>=5000?'不限':'≤¥'+mp;
+  const dh=Math.floor(md/60),dm=md%60;
+  $('dVal').textContent=md>=4320?'不限':`≤${dh}h${dm?dm+'m':''}`;
+  const kinds=new Set([...document.querySelectorAll('#kinds .chip.on')].map(c=>c.dataset.k));
+  const trs=new Set([...document.querySelectorAll('#trans .chip.on')].map(c=>c.dataset.k));
+  const dparts=[...document.querySelectorAll('#dpart .chip.on')].map(c=>c.dataset.k.split('-').map(Number));
+  const hm=s=>{const m=/^(\d{1,2}):(\d{2})$/.exec((s||'').trim());if(!m)return null;const h=+m[1],mi=+m[2];return (h<24&&mi<60)?h*60+mi:null};
+  const inR=(t,lo,hi)=>{if(lo==null&&hi==null)return true;if(lo==null)return t<=hi;if(hi==null)return t>=lo;return lo<=hi?(t>=lo&&t<=hi):(t>=lo||t<=hi)};
+  const dLo=hm($('depLo').value),dHi=hm($('depHi').value),aLo=hm($('arrLo').value),aHi=hm($('arrHi').value);
+  let arr=state.combos.filter(c=>{
+    if(c.total_price&&c.total_price>mp)return false;
+    if(c.total_min>md)return false;
+    if(!kinds.has(normKind(c.combo_kind)))return false;
+    if(!trs.has(String(c.transfers)))return false;
+    if(dparts.length){
+      const h=+((c.legs[0]&&c.legs[0].start_time||'0:0').split(':')[0]);
+      if(!dparts.some(([a,b])=>h>=a&&h<b))return false;
+    }else return false;
+    const dep=hm(c.legs[0]&&c.legs[0].start_time),arrT=hm(c.legs[c.legs.length-1]&&c.legs[c.legs.length-1].arrive_time);
+    if(dep!=null&&!inR(dep,dLo,dHi))return false;
+    if(arrT!=null&&!inR(arrT,aLo,aHi))return false;
+    if(!hasTicket(c))return false;
+    return true;
+  });
+  const sort=$('sort').value;
+  if(sort==='price')arr.sort((a,b)=>(a.total_price??9e9)-(b.total_price??9e9));
+  else if(sort==='time')arr.sort((a,b)=>a.total_min-b.total_min);
+  else if(sort==='wait')arr.sort((a,b)=>waitSum(a)-waitSum(b));
+  else arr.sort((a,b)=>smart(a)-smart(b));
+  state.filtered=arr;
+  renderCards();drawScatter();
+}
+function normKind(k){if(!k)return'直达';if(k.startsWith('直达'))return'直达';return k}
+function waitSum(c){return (c.waits||[]).reduce((a,b)=>a+b,0)}
+function smart(c){
+  const ps=state.combos.filter(x=>x.total_price).map(x=>x.total_price);
+  const pmin=Math.min(...ps,0),pmax=Math.max(...ps,1);
+  const tmin=Math.min(...state.combos.map(x=>x.total_min)),tmax=Math.max(...state.combos.map(x=>x.total_min));
+  const pn=c.total_price?(c.total_price-pmin)/Math.max(1,pmax-pmin):0.7;
+  const tn=(c.total_min-tmin)/Math.max(1,tmax-tmin);
+  return pn*0.55+tn*0.45+(c.transfers*0.05);
+}
+function fmtDur(m){return `${Math.floor(m/60)}h${m%60?m%60+'m':''}`}
+function renderBench(){
+  const cs=state.combos.filter(c=>c.total_price);
+  const pool=cs.length?cs:state.combos;
+  const fast=[...pool].sort((a,b)=>a.total_min-b.total_min)[0];
+  const cheap=[...pool].sort((a,b)=>(a.total_price??9e9)-(b.total_price??9e9))[0];
+  const mid=[...pool].sort((a,b)=>smart(a)-smart(b))[0];
+  const f=(c)=>c?`${c.codes} · ${c.total_price?'¥'+Math.round(c.total_price):'票价待查'} · ${fmtDur(c.total_min)}`:'—';
+  $('bFast').textContent=f(fast);$('bCheap').textContent=f(cheap);$('bMid').textContent=f(mid);
+  $('bFastS').textContent=fast?`${fast.transfers===0?'直达':'中转'+fast.transfers+'次'} ${fast.combo_kind}`:'';
+  $('bCheapS').textContent=cheap?`${cheap.transfers===0?'直达':'中转'+cheap.transfers+'次'} ${cheap.combo_kind}`:'';
+  $('bMidS').textContent=mid?`比最快省 ¥${fast&&mid.total_price&&fast.total_price?Math.round(fast.total_price-mid.total_price):'?'} · 比最便宜快 ${cheap?fmtDur(Math.max(0,cheap.total_min-mid.total_min)):''}`:'';
+  if(state.mock)$('bMidS').textContent+='（演示数据：12306限流）';
+}
+function renderCards(){
+  const box=$('cards');
+  if(!state.filtered.length){box.innerHTML='<div class="empty">被过滤完了，放宽价格/时长滑杆试试。</div>';return}
+  const st=state.stats;
+  $('count').textContent=`共 ${state.filtered.length} 个方案`+(st?` · 打了${st.requests}次12306 · 试了${st.middles}个中转站`:'');
+  const bar=noticeBar();
+  const n=Math.min(state.shown||60,state.filtered.length);
+  box.innerHTML=bar+state.filtered.slice(0,n).map((c,i)=>{
+    const legs=c.legs.map((l,li)=>{
+      const cls=l.type_letter==='G'||l.type_letter==='C'?'g':(l.type_letter==='K'||l.type_letter==='T'||l.type_letter==='Z')?'k':'d';
+      const depTag=(l.dep_plus>0)?`<sup style="color:#FFD75E">+${l.dep_plus}天</sup>`:'';
+      const arrTag=(l.arr_plus>0)?`<sup style="color:#FFD75E">+${l.arr_plus}天</sup>`:'';
+      const legPrice=(l.price!=null)?` · ¥${Math.round(l.price)}${l.price_name||''}`:'';
+      const midName=(li>0)?(c.legs[li-1].to_name||c.legs[li-1].to_code):'';
+      return `${li>0?`<div class="seg wait">${midName?midName+'<br>':''}换乘<br>${c.waits[li-1]}min</div>`:''}<div class="seg ${cls}" style="flex:${Math.max(1,l.duration_min||120)}"><b>${l.code}</b> ${l.type_letter==='G'?'高铁':l.train_type||''}${legPrice}<br>${l.from_name||l.from_code} ${l.start_time}${depTag} → ${l.to_name||l.to_code} ${l.arrive_time}${arrTag} · ${l.duration||''}<br><span style="opacity:.8">${seatStr(l)}</span></div>`;
+    }).join('');
+    const dateTag=(c.arr_date&&c.dep_date&&c.arr_date!==c.dep_date)?` · ${c.dep_date.slice(5)}出发→${c.arr_date.slice(5)}到达`:` · ${c.dep_date?c.dep_date.slice(5)+'出发':''}`;
+    return `<div class="card" data-i="${i}">
+      <div class="card-top"><span class="price">¥${c.total_price?Math.round(c.total_price):'—'}<small> ${c.has_price?'':'/票价待查'}</small></span>
+      <span class="dur">${fmtDur(c.total_min)} · ${c.transfers===0?'直达':'中转'+c.transfers+'次'}</span>
+      <span class="tag ${c.combo_kind==='高铁+普速'?'hot':c.transfers===0?'green':''}">${c.combo_kind}</span>
+      ${i===0?'<span class="tag hot">★ 首选</span>':''}
+      <span class="save">${saveStr(c)}</span></div>
+      <div class="timeline">${legs}</div>
+      <div class="meta"><span>${c.codes}</span><span>等待合计 ${waitSum(c)}min</span><span>${c.legs.map(l=>(l.from_name||l.from_code)+'→'+(l.to_name||l.to_code)).join(' / ')}</span><span>${dateTag}</span></div>
+      <div class="btnrow"><button class="btn primary" onclick="toggleBuy(this)">购票指引</button><button class="btn" onclick="selStar(${i},true)">星图定位</button></div>
+      <div class="buy">去 <b>12306 App/官网</b> 按以下分段<b>分别购票</b>（本系统不代购；也可用12306“中转/接续换乘”页直接按此组合出票）：<br>${c.legs.map((l,j)=>`${j+1}. ${l.dep_date||c.dep_date||''} ${l.code}（${l.from_name||l.from_code}${l.start_time}开${l.dep_plus?'+'+l.dep_plus+'天':''}）→${l.to_name||l.to_code}（到${l.arrive_time}${l.arr_plus?'+'+l.arr_plus+'天':''}${l.price!=null?`，约¥${Math.round(l.price)}${l.price_name||''}`:''}）${j<c.legs.length-1?`，到达后换乘${c.waits[j]}分钟`:''}`).join('<br>')}<br>⚠ 同站换乘最稳（建议预留30分钟以上）；同城不同站需预留1h+市内交通；夜车接早车注意是次日日期。</div>
+    </div>`;
+  }).join('');
+  if(state.filtered.length>n)box.innerHTML+=`<div class="empty">已显示${n}/${state.filtered.length}，<button class="btn primary" onclick="state.shown=(state.shown||60)+120;renderCards();window.scrollTo(0,document.body.scrollHeight)">再显示120条 ↓</button></div>`;
+}
+function seatStr(l){const s=l.seats||{};const ks=['二等','一等','商务特等','硬座','硬卧','无座'];return ks.filter(k=>s[k]).map(k=>k+(typeof s[k]==='string'?s[k]:'')).slice(0,3).join(' ')}
+function saveStr(c){
+  const ps=state.combos.filter(x=>x.total_price&&x.transfers===0).map(x=>x.total_price);
+  if(!c.total_price||!ps.length||c.transfers===0)return'';
+  const mx=Math.max(...ps);
+  return c.total_price<mx?`比直达最高省 ¥${Math.round(mx-c.total_price)}`:'';
+}
+window.toggleBuy=btn=>btn.closest('.card').classList.toggle('open');
+window.selStar=(i,scroll)=>{document.querySelectorAll('.card').forEach(e=>e.classList.remove('sel'));const el=document.querySelector(`.card[data-i="${i}"]`);if(el){el.classList.add('sel');if(scroll)el.scrollIntoView({behavior:'smooth',block:'center'})}};
+
+// 散点星图
+function drawScatter(){
+  const cv=$('scatter'),ctx=cv.getContext('2d');
+  const W=cv.width=cv.clientWidth*2,H=cv.height=500;
+  ctx.clearRect(0,0,W,H);
+  const arr=state.filtered.slice(0,200);
+  if(!arr.length)return;
+  const ts=arr.map(c=>c.total_min),ps=arr.map(c=>c.total_price??0);
+  const tmin=Math.min(...ts),tmax=Math.max(...ts, tmin+60);
+  const pmin=Math.min(...ps.filter(Boolean),0),pmax=Math.max(...ps,1);
+  const X=t=>60+(t-tmin)/Math.max(1,tmax-tmin)*(W-120);
+  const Y=p=>H-50-(p-pmin)/Math.max(1,pmax-pmin)*(H-110);
+  ctx.strokeStyle='#3a4642';ctx.fillStyle='#8b968f';ctx.font='20px monospace';
+  for(let i=0;i<=4;i++){const t=tmin+(tmax-tmin)*i/4;ctx.fillText(fmtDur(Math.round(t)),X(t)-20,H-18);
+    ctx.strokeStyle='#222b29';ctx.beginPath();ctx.moveTo(X(t),20);ctx.lineTo(X(t),H-50);ctx.stroke()}
+  const colors={0:'#7ee2a8',1:'#FF5A1F',2:'#6aa8ff'};
+  arr.forEach((c,i)=>{
+    const x=X(c.total_min),y=Y(c.total_price??pmax);
+    ctx.fillStyle=colors[c.transfers]||'#fff';
+    ctx.beginPath();ctx.arc(x,y,i===0?13:9,0,7);ctx.fill();
+    if(i===0){ctx.strokeStyle='#FFD75E';ctx.lineWidth=4;ctx.stroke()}
+    c._x=x;c._y=y;
+  });
+  cv.onclick=e=>{
+    const r=cv.getBoundingClientRect();
+    const mx=(e.clientX-r.left)*2,my=(e.clientY-r.top)*2;
+    let bi=0,bd=1e12;
+    arr.forEach((c,i)=>{const d=(c._x-mx)**2+(c._y-my)**2;if(d<bd){bd=d;bi=i}});
+    selStar(bi,true);drawScatter();
+  };
+}
+</script>
+</body>
+</html>
