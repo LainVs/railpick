@@ -321,6 +321,7 @@ function handleResult(r){
   if(r.error&&(!r.combos||!r.combos.length)){$('cards').innerHTML=`<div class="empty">查询失败：${r.error}<br><br><button class="btn primary" onclick="query()">30秒后重试实时查询 ⟳</button></div>`;return}
   const from=$('from').value.trim(),to=$('to').value.trim();
   state.combos=r.combos||[];
+  state._smartCache=null;
   state.mock=r.mock; state.warn=r.warn; state.cached=r.cached; state.stale=r.stale;
   state.stats=r.stats||null; state.graph=r.graph||false;
   state.graphCand=r.candidates; state.graphVer=r.verified; state.liveAdded=r.live_added||0;
@@ -384,11 +385,16 @@ function applyFilters(){
 function normKind(k){if(!k)return'直达';if(k.startsWith('直达'))return'直达';return k}
 function waitSum(c){return (c.waits||[]).reduce((a,b)=>a+b,0)}
 function smart(c){
-  const ps=state.combos.filter(x=>x.total_price).map(x=>x.total_price);
-  const pmin=Math.min(...ps,0),pmax=Math.max(...ps,1);
-  const tmin=Math.min(...state.combos.map(x=>x.total_min)),tmax=Math.max(...state.combos.map(x=>x.total_min));
-  const pn=c.total_price?(c.total_price-pmin)/Math.max(1,pmax-pmin):0.7;
-  const tn=(c.total_min-tmin)/Math.max(1,tmax-tmin);
+  if(!state._smartCache){
+    const ps=state.combos.filter(x=>x.total_price).map(x=>x.total_price);
+    state._smartCache={pmin:Math.min(...ps,0),pmax:Math.max(...ps,1),
+      tmin:Math.min(...state.combos.map(x=>x.total_min)),
+      tmax:Math.max(...state.combos.map(x=>x.total_min))};
+    state._smartCache.tmax=Math.max(state._smartCache.tmax,state._smartCache.tmin+60);
+  }
+  const sc=state._smartCache;
+  const pn=c.total_price?(c.total_price-sc.pmin)/Math.max(1,sc.pmax-sc.pmin):0.7;
+  const tn=(c.total_min-sc.tmin)/Math.max(1,sc.tmax-sc.tmin);
   return pn*0.55+tn*0.45+(c.transfers*0.05);
 }
 function fmtDur(m){return `${Math.floor(m/60)}h${m%60?m%60+'m':''}`}

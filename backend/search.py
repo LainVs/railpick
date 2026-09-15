@@ -75,7 +75,7 @@ def hm_to_min(hm):
         h, m = hm.split(":")
         return int(h) * 60 + int(m)
     except Exception:
-        return 0
+        return None
 
 
 def parse_date(s):
@@ -129,7 +129,8 @@ def need_next_day(a_legs, max_gap):
         try:
             if a["_arr"].date() > a["_dep"].date():
                 return True
-            if hm_to_min(a["arrive_time"]) + max_gap >= 1440:
+            hm = hm_to_min(a["arrive_time"])
+            if hm is not None and hm + max_gap >= 1440:
                 return True
         except Exception:
             continue
@@ -369,9 +370,14 @@ def build_combo(legs, prices, wait_list):
         total_min = int((legs[-1]["_arr"] - legs[0]["_dep"]).total_seconds() // 60)
     except Exception:
         first, last = legs[0], legs[-1]
-        total_min = hm_to_min(last["arrive_time"]) - hm_to_min(first["start_time"])
-        if total_min < 0:
-            total_min += 1440
+        h1 = hm_to_min(last["arrive_time"])
+        h2 = hm_to_min(first["start_time"])
+        if h1 is None or h2 is None:
+            total_min = 0
+        else:
+            total_min = h1 - h2
+            if total_min < 0:
+                total_min += 1440
     base_day = legs[0]["_dep"].date()
     pub_legs = []
     for l in legs:
@@ -570,18 +576,34 @@ def search_combos(from_kw, to_kw, date, max_transfer=1, min_gap=20, max_gap=240,
             if len(pairs1) > cfg["cap1"] * 2:
                 break
         pg(0.58, f"配出{len(pairs1)}对衔接，正在查分段票价…")
+        ex_p = ThreadPoolExecutor(max_workers=4)
+        try:
+            price_futs = {}
+            cap_pairs = pairs1[:cfg["cap1"]]
+            for i, (a, b, w) in enumerate(cap_pairs):
+                price_futs[ex_p.submit(leg_price, a, a["dep_date"], price_cache)] = ("a", i)
+                price_futs[ex_p.submit(leg_price, b, b["dep_date"], price_cache)] = ("b", i)
+            done_p = 0
+            for f in consume_ordered(price_futs, should_stop):
+                done_p += 1
+                try:
+                    f.result()
+                except Exception:
+                    pass
+                if done_p % 10 == 0 or done_p >= len(price_futs):
+                    pg(0.58 + 0.27 * done_p / max(1, len(price_futs)),
+                       f"查票价 {done_p}/{len(price_futs)}…")
+        finally:
+            ex_p.shutdown(wait=False, cancel_futures=True)
         for i, (a, b, w) in enumerate(pairs1):
             check_stop(should_stop)
-            pa, pan = leg_price(a, a["dep_date"], price_cache) if with_price else (None, None)
-            pb, pbn = leg_price(b, b["dep_date"], price_cache) if with_price else (None, None)
+            pa, pan = price_cache.get((a["train_no"], a["from_no"], a["to_no"], a["dep_date"]), (None, None))
+            pb, pbn = price_cache.get((b["train_no"], b["from_no"], b["to_no"], b["dep_date"]), (None, None))
             aa = dict(a); aa["price"] = pa; aa["price_name"] = pan
             bb = dict(b); bb["price"] = pb; bb["price_name"] = pbn
             combos.append(build_combo([aa, bb], [pa, pb], [w]))
             if len(combos) > cfg["cap1"]:
                 break
-            if i % 10 == 0 or i + 1 >= len(pairs1):
-                pg(0.58 + 0.27 * (i + 1) / max(1, len(pairs1)),
-                   f"查票价 {i + 1}/{len(pairs1)}…")
 
     # 2次中转：Top 中转站两两组合（地毯式放宽对数；6 站最多 30 对，够用）
     if max_transfer >= 2:
@@ -633,17 +655,19 @@ def search_combos(from_kw, to_kw, date, max_transfer=1, min_gap=20, max_gap=240,
             check_stop(should_stop)
             list_a = spread_sample(leg_map.get(("A", c1), []), 6)
             list_b = leg_map.get(("B", c2), [])
-            for a, mid, w1 in pair_legs(list_a, mids, min_gap, max_gap, per_a=3):
-                for _, b, w2 in pair_legs([mid], list_b, min_gap, max_gap, per_a=3):
-                    pa, pan = leg_price(a, a["dep_date"], price_cache) if with_price else (None, None)
-                    pm, pmn = leg_price(mid, mid["dep_date"], price_cache) if with_price else (None, None)
-                    pb, pbn = leg_price(b, b["dep_date"], price_cache) if with_price else (None, None)
-                    aa = dict(a); aa["price"] = pa; aa["price_name"] = pan
-                    mm = dict(mid); mm["price"] = pm; mm["price_name"] = pmn
-                    bb = dict(b); bb["price"] = pb; bb["price_name"] = pbn
-                    combos.append(build_combo([aa, mm, bb], [pa, pm, pb], [w1, w2]))
-                    if len(combos) > cfg["cap2"]:
-                        break
+        for a, mid, w1 in pair_legs(list_a, mids, min_gap, max_gap, per_a=3):
+            if len(combos) > cfg["cap2"]:
+                break
+            for _, b, w2 in pair_legs([mid], list_b, min_gap, max_gap, per_a=3):
+                pa, pan = leg_price(a, a["dep_date"], price_cache) if with_price else (None, None)
+                pm, pmn = leg_price(mid, mid["dep_date"], price_cache) if with_price else (None, None)
+                pb, pbn = leg_price(b, b["dep_date"], price_cache) if with_price else (None, None)
+                aa = dict(a); aa["price"] = pa; aa["price_name"] = pan
+                mm = dict(mid); mm["price"] = pm; mm["price_name"] = pmn
+                bb = dict(b); bb["price"] = pb; bb["price_name"] = pbn
+                combos.append(build_combo([aa, mm, bb], [pa, pm, pb], [w1, w2]))
+                if len(combos) > cfg["cap2"]:
+                    break
 
     enrich_names(combos, smap)
     pg(0.96, "排序汇总…")

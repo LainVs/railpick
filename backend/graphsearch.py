@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, time as dtime
 
 from . import c12306 as api
 from .search import build_combo, station_name, parse_date, city_group, consume_ordered
-from .cancel import check as check_stop
+from .cancel import check as check_stop, SearchCancelled
 
 TYPE_MAP = {"G": "高铁", "C": "城际", "D": "动车", "Z": "直达",
             "T": "特快", "K": "快速"}
@@ -239,7 +239,6 @@ def path_to_combo(path):
 
 def verify_combos(combos, on_progress=None, workers=4, should_stop=None):
     """对候选做实时核验：分段查余票找同车次，补席位+票价；对不上就丢掉."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     from concurrent.futures import ThreadPoolExecutor, as_completed
     pg = on_progress or (lambda f, m: None)
     keys, order = {}, []

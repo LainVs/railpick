@@ -179,6 +179,7 @@ def graph_stats():
 
 
 _crawl_running = {"on": False}
+_crawl_lock = _th.Lock()
 
 
 @app.post("/api/graph/crawl")
@@ -186,10 +187,10 @@ def graph_crawl(max_requests: int = Query(default=1000, ge=0, le=5000),
                 from_stations: str = Query(default=""),
                 phase: str = Query(default="auto")):
     """一键爬取：后台礼貌爬时刻表，复用任务进度接口轮询。from_stations 逗号分隔优先站。"""
-    """一键爬取：后台礼貌爬时刻表，复用任务进度接口轮询。"""
-    if _crawl_running["on"]:
-        return {"started": False, "reason": "已有爬取在跑"}
-    _crawl_running["on"] = True
+    with _crawl_lock:
+        if _crawl_running["on"]:
+            return {"started": False, "reason": "已有爬取在跑"}
+        _crawl_running["on"] = True
     jid = jobs.create()
     import re
     prio = [x for x in re.split(r"[,，]", from_stations) if x.strip()]

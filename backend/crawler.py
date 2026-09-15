@@ -169,6 +169,9 @@ def crawl_step(con, frm, too, day, rc, budget, should_stop=None, on_beat=None, b
             code = t.get("code") or tno
             if code not in recent:
                 recent.append(code)
+            rc.ok()
+        else:
+            rc.fail()
     if done_all:
         graphdb.mark_od(con, frm, too, day, fresh)
     return used, fresh, True, done_all, recent[-3:]

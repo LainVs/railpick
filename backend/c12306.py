@@ -4,7 +4,7 @@ import time
 import random
 import threading
 import requests
-from functools import lru_cache
+from collections import OrderedDict
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -67,7 +67,7 @@ def reset_session():
 # ---------- 轻量 TTL 缓存（无外部依赖，防重复打 12306） ----------
 import time as _time
 
-_CACHE = {}
+_CACHE = OrderedDict()
 _cache_lock = threading.Lock()
 TICKET_TTL = 120   # 余票 2 分钟（同一查询重复点不再打过去）
 ROUTE_TTL = 3600   # 经停站时刻表一天内基本不变
@@ -84,9 +84,9 @@ def _cache_get(key, ttl):
 def _cache_set(key, val):
     with _cache_lock:
         _CACHE[key] = (_time.time(), val)
-        if len(_CACHE) > 500:  # 防止无限增长，淘汰最旧 100 条
-            for k, _ in sorted(_CACHE.items(), key=lambda kv: kv[1][0])[:100]:
-                _CACHE.pop(k, None)
+        _CACHE.move_to_end(key)
+        while len(_CACHE) > 500:
+            _CACHE.popitem(last=False)
 
 
 def _cache_stale(key):
@@ -122,6 +122,7 @@ def parse_station_js(js_text):
 
 
 _stations_cache = {"list": [], "by_name": {}, "by_code": {}, "ts": 0}
+_stations_lock = threading.Lock()
 
 def load_stations(force=False):
     if _stations_cache["list"] and not force:
@@ -130,10 +131,13 @@ def load_stations(force=False):
         js = fetch_stations_raw()
         lst = parse_station_js(js)
         if lst:
-            _stations_cache["list"] = lst
-            _stations_cache["by_name"] = {x["name"]: x for x in lst}
-            _stations_cache["by_code"] = {x["code"]: x for x in lst}
-            _stations_cache["ts"] = time.time()
+            by_name = {x["name"]: x for x in lst}
+            by_code = {x["code"]: x for x in lst}
+            with _stations_lock:
+                _stations_cache["list"] = lst
+                _stations_cache["by_name"] = by_name
+                _stations_cache["by_code"] = by_code
+                _stations_cache["ts"] = time.time()
             return lst
     except Exception:
         pass
@@ -449,7 +453,9 @@ def _parse_price_val(v):
         if isinstance(v, str) and v.startswith("¥"):
             return float(v.replace("¥", ""))
         if isinstance(v, (int, float)):
-            return float(v) / 10 if float(v) > 1000 else float(v)
+            return float(v)
+        if isinstance(v, str):
+            return float(v)
     except Exception:
         pass
     return None

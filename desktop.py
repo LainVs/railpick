@@ -73,6 +73,9 @@ class App:
         self.last_source = "实时"
         self._stations_ready = False
         self._debounce_ids = {}  # 按键防抖：key -> after id
+        self._smart_ps = []
+        self._smart_pmin = self._smart_pmax = 0
+        self._smart_tmin = self._smart_tmax = 60
         self._build()
         self.load_config()
         self.btn_go.config(state="disabled")
@@ -380,7 +383,8 @@ class App:
     # ---------- 历史 ----------
     def load_hist(self):
         try:
-            h = json.load(open(HIST_FILE, encoding="utf-8"))
+            with open(HIST_FILE, encoding="utf-8") as f:
+                h = json.load(f)
             return [x for x in h if isinstance(x, (list, tuple)) and len(x) == 2]
         except Exception:
             return []
@@ -404,8 +408,8 @@ class App:
     def save_hist(self, f, t):
         try:
             h = [x for x in self.load_hist() if not (x[0] == f and x[1] == t)]
-            json.dump([[f, t]] + h[:5], open(HIST_FILE, "w", encoding="utf-8"),
-                      ensure_ascii=False)
+            with open(HIST_FILE, "w", encoding="utf-8") as fh:
+                json.dump([[f, t]] + h[:5], fh, ensure_ascii=False)
         except Exception:
             pass
         self.render_hist()
@@ -493,6 +497,11 @@ class App:
         pop.wm_attributes("-topmost", True)
         x = entry.winfo_rootx()
         y = entry.winfo_rooty() + entry.winfo_height() + 2
+        pop.update_idletasks()
+        screen_h = pop.winfo_screenheight()
+        pop_h = min(8, len(ss)) * 20 + 4
+        if y + pop_h > screen_h:
+            y = entry.winfo_rooty() - pop_h - 2
         pop.wm_geometry(f"+{x}+{y}")
         lb = tk.Listbox(pop, width=max(20, entry.winfo_width() // 8), height=min(8, len(ss)))
         lb.pack()
@@ -544,13 +553,15 @@ class App:
                    "kinds": {k: v.get() for k, v in self.kind_vars.items()},
                    "trs": {k: v.get() for k, v in self.tr_vars.items()},
                    "dps": {k: v.get() for k, v in self.dp_vars.items()}}
-            json.dump(cfg, open(CONFIG_FILE, "w", encoding="utf-8"), ensure_ascii=False)
+            with open(CONFIG_FILE, "w", encoding="utf-8") as fh:
+                json.dump(cfg, fh, ensure_ascii=False)
         except Exception:
             pass
 
     def load_config(self):
         try:
-            cfg = json.load(open(CONFIG_FILE, encoding="utf-8"))
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                cfg = json.load(f)
         except Exception:
             return
         try:
@@ -819,19 +830,25 @@ class App:
         if not self.v_ticket.get():
             return True
         for l in c["legs"]:
-            if any(v and v not in ("--", "无") for v in (l.get("seats") or {}).values()):
-                return True
-        return False
+            if not any(v and v not in ("--", "无") for v in (l.get("seats") or {}).values()):
+                return False
+        return True
 
     def smart(self, c):
-        ps = [x["total_price"] for x in self.combos if x["total_price"]]
-        pmin, pmax = min(ps or [0]), max(ps or [1])
-        ts = [x["total_min"] for x in self.combos]
-        tmin = min(ts)
-        tmax = max(ts + [tmin + 60])
+        ps = self._smart_ps
+        pmin, pmax = self._smart_pmin, self._smart_pmax
+        tmin, tmax = self._smart_tmin, self._smart_tmax
         pn = (c["total_price"] - pmin) / max(1, pmax - pmin) if c["total_price"] else 0.7
         tn = (c["total_min"] - tmin) / max(1, tmax - tmin)
         return pn * 0.55 + tn * 0.45 + c["transfers"] * 0.05
+
+    def _precompute_smart(self):
+        ps = [x["total_price"] for x in self.combos if x["total_price"]]
+        self._smart_pmin = min(ps or [0])
+        self._smart_pmax = max(ps or [1])
+        ts = [x["total_min"] for x in self.combos]
+        self._smart_tmin = min(ts) if ts else 0
+        self._smart_tmax = max(ts + [self._smart_tmin + 60]) if ts else 60
 
     def reset_filters(self):
         self.v_price.set(5000)
@@ -900,6 +917,7 @@ class App:
     def apply_filters(self):
         if not self.combos:
             return
+        self._precompute_smart()
         mp, md = self.v_price.get(), self.v_dur.get()
         kinds = {k for k, v in self.kind_vars.items() if v.get()}
         trs = {k for k, v in self.tr_vars.items() if v.get()}
@@ -970,6 +988,7 @@ class App:
         pool = [c for c in self.combos if c["total_price"]] or self.combos
         if not pool:
             return
+        self._precompute_smart()
         fast = min(pool, key=lambda c: c["total_min"])
         cheap = min(pool, key=lambda c: c["total_price"] if c["total_price"] else 9e9)
         mid = min(pool, key=lambda c: self.smart(c))
