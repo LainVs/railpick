@@ -36,12 +36,51 @@ def seed_ods():
 
 
 def build_ods(priority_codes=None, seed=None):
-    """OD 顺序：优先站的进出对排最前（常坐的站先攒），再跟全量种子对，去重保序."""
+    """OD 顺序：优先站的进出对排最前（常坐的站先攒），再跟全量种子对，去重保序.
+
+    优先站不能只和 20 个种子站配对：唐山这类站的真正换乘邻居是济南/泰安/天津，
+    它们不在种子里，只跟种子配对就永远爬不到顺路中转（图里全是京沪京广的干线车）。
+    所以优先站 = 种子 + 走廊上最近的若干地级市，两头都爬。
+    """
     seed = list(seed or SEED)
     ordered, seen = [], set()
     for p in (priority_codes or []):
-        # 优先站即使不在种子里也照爬：和所有种子站配对（比如唐山）
-        for b in seed:
+        partners = list(seed)
+        # 按“顺路程度”补充优先站的邻居：以优先站为起点、各个方向的走廊都算，
+        # 每个城市只取主站（站名等于城市名或最短的那个），避免“天津北/北京通州”
+        # 这类小站把名额占满。
+        try:
+            pname = None
+            for s in api.load_stations():
+                if s["code"] == p:
+                    pname = s["name"]
+                    break
+            pc = geo.coords_for(pname) if pname else None
+            if pc:
+                near = []
+                for city in geo.CITY:
+                    if city == pname:
+                        continue
+                    c = geo.coords_for(city)
+                    if not c:
+                        continue
+                    cands = [s for s in api.load_stations()
+                             if s["name"] == city or s["name"].startswith(city)]
+                    if not cands:
+                        continue
+                    main = min(cands, key=lambda s: (s["name"] != city, len(s["name"])))
+                    code = main["code"]
+                    if not code or code == p or code in partners:
+                        continue
+                    d2 = (c[0] - pc[0]) ** 2 + (c[1] - pc[1]) ** 2
+                    near.append((d2, code))
+                near.sort()
+                for _d2, code in near[:24]:
+                    if code not in partners:
+                        partners.append(code)
+        except Exception:
+            pass
+        for b in partners:
             if b == p:
                 continue
             for o in ((p, b), (b, p)):

@@ -54,6 +54,25 @@ assert S.same_city("TSP", "FUP") is True  # 广州-唐山案：Z14到唐山北
 assert "泰安" in S.HUBS
 print("5 ok: same-city Changsha+Taian")
 
+# ---- 5b) 同城组里的站码必须在真实站名库里存在 ----
+# 回归：CQK / KXM 是废弃码，导致查“重庆/昆明”时漏掉重庆西、昆明南
+try:
+    _api = api.load_stations()
+except Exception:
+    _api = None
+if _api:
+    _codes = {s["code"] for s in _api}
+    _bad = {c for g in S.SAME_CITY for c in g} - _codes
+    assert not _bad, f"同城组里有不存在的站码: {sorted(_bad)}"
+    # 直辖市/省会的主要同城站要齐
+    for city, want in (("重庆", {"CQW", "CUW", "CXW"}),
+                       ("昆明", {"KMM", "KOM"}),
+                       ("广州", {"GZQ", "IZQ", "GGQ"})):
+        _, code = api.resolve_station(city)
+        grp = S.city_group(code)
+        assert want <= grp, f"{city} 同城组缺站: {want - grp}"
+    print("5b ok: same-city codes all real")
+
 # ---- 6) 西安-太原案：B 段前 10 趟全在 A 到达之前发走，也必须找到下午的配对 ----
 def L(code, st, dur, fc="AAA", tc="BBB"):
     h, m = map(int, st.split(":"))

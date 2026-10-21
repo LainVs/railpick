@@ -121,12 +121,22 @@ def parse_station_js(js_text):
     return stations
 
 
-_stations_cache = {"list": [], "by_name": {}, "by_code": {}, "ts": 0}
+_stations_cache = {"list": [], "by_name": {}, "by_code": {}, "ts": 0, "fallback": False}
 _stations_lock = threading.Lock()
+FALLBACK_RETRY_SEC = 60  # 降级后多久允许重试在线拉取
+
 
 def load_stations(force=False):
-    if _stations_cache["list"] and not force:
-        return _stations_cache["list"]
+    """加载站名库。在线失败时用内置核心站兜底，但**不把降级结果固化**：
+    隔一段时间（FALLBACK_RETRY_SEC）会自动重试，网络恢复后立刻换成全量 3400+ 站。
+    （曾经：首次启动网络抖动 -> 全程只剩 75 个核心站，小站全查不到。）
+    """
+    cached = _stations_cache["list"]
+    if cached and not force:
+        if not _stations_cache.get("fallback"):
+            return cached
+        if time.time() - _stations_cache.get("ts", 0) < FALLBACK_RETRY_SEC:
+            return cached  # 刚降级过，先别急着再打一次网
     try:
         js = fetch_stations_raw()
         lst = parse_station_js(js)
@@ -138,9 +148,12 @@ def load_stations(force=False):
                 _stations_cache["by_name"] = by_name
                 _stations_cache["by_code"] = by_code
                 _stations_cache["ts"] = time.time()
+                _stations_cache["fallback"] = False
             return lst
     except Exception:
         pass
+    if _stations_cache.get("fallback") and cached:
+        return cached  # 重试仍失败，继续用上次的兜底名单
     # 降级：内置核心站，保证离线可用
     fallback = [
         ("北京", "BJP"), ("北京南", "VNP"), ("北京西", "BXP"), ("北京北", "VAP"), ("北京朝阳", "IFP"), ("北京丰台", "FTP"),
@@ -160,9 +173,12 @@ def load_stations(force=False):
         ("蚌埠", "BBH"), ("阜阳", "FYH"), ("襄阳", "XFN"), ("怀化", "HHQ"), ("桂林", "GLZ"), ("南宁", "NNZ"),
     ]
     lst = [{"name": n, "code": c, "pinyin": "", "abbr": "", "short": ""} for n, c in fallback]
-    _stations_cache["list"] = lst
-    _stations_cache["by_name"] = {x["name"]: x for x in lst}
-    _stations_cache["by_code"] = {x["code"]: x for x in lst}
+    with _stations_lock:
+        _stations_cache["list"] = lst
+        _stations_cache["by_name"] = {x["name"]: x for x in lst}
+        _stations_cache["by_code"] = {x["code"]: x for x in lst}
+        _stations_cache["ts"] = time.time()
+        _stations_cache["fallback"] = True  # 标记：过一会儿还会再试在线全量
     return lst
 
 
@@ -179,23 +195,45 @@ def resolve_station(keyword):
     if keyword.upper() in by_code:
         s = by_code[keyword.upper()]
         return s["name"], s["code"]
+    # 完全相等没有时才做包含匹配；按“越短越接近”排，避免“北京”命中“北京北”先于自身
+    low = keyword.lower()
+    best = None
     for s in lst:
-        if keyword in s["name"] or keyword.lower() in s.get("pinyin", ""):
-            return s["name"], s["code"]
+        name = s["name"]
+        if keyword in name or (low and low in s.get("pinyin", "")):
+            score = (0 if name.startswith(keyword) else 1, len(name))
+            if best is None or score < best[0]:
+                best = (score, s)
+                if score == (0, len(name)) and len(name) == len(keyword):
+                    break
+    if best:
+        return best[1]["name"], best[1]["code"]
     return None, None
 
 
 def search_stations(q, limit=10):
+    """站名联想：完全匹配/前缀匹配优先，其次包含匹配；拼音和电报码也认."""
     lst = load_stations()
-    q = (q or "").strip().lower()
+    q = (q or "").strip()
     if not q:
         return lst[:limit]
-    out = []
+    low = q.lower()
+    up = q.upper()
+    head, mid = [], []
     for s in lst:
-        if q in s["name"].lower() or q in s.get("pinyin", "") or q in s.get("abbr", "") or q.upper() == s["code"]:
-            out.append(s)
-        if len(out) >= limit:
+        name = s["name"]
+        pinyin = s.get("pinyin", "")
+        if name == q or s["code"] == up or s.get("abbr") == low:
+            head.insert(0, s)
+        elif name.startswith(q) or pinyin.startswith(low) or s["code"].startswith(up):
+            head.append(s)
+        elif q in name or low in pinyin or low in s.get("abbr", ""):
+            mid.append(s)
+        if len(head) >= limit:
             break
+    out = head[:limit]
+    if len(out) < limit:
+        out.extend(mid[:limit - len(out)])
     return out
 
 

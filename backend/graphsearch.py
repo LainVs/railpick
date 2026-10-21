@@ -5,8 +5,11 @@
 打 12306 核验余票和价格——又自由又省配额。
 """
 import heapq
+import os
+import threading
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from datetime import datetime, timedelta, time as dtime
+from datetime import datetime, timedelta, time as dtime, date
 
 from . import c12306 as api
 from .search import build_combo, station_name, parse_date, city_group, consume_ordered
@@ -44,11 +47,11 @@ def build_network(con):
     """
     net = defaultdict(list)
     n_trains = 0
+    cur, acc = None, []
     rows = con.execute(
         "SELECT s.train_no, t.code, s.seq, s.station, s.arrive, s.depart"
         " FROM stops s JOIN trains t ON t.train_no=s.train_no"
         " ORDER BY s.train_no, s.seq").fetchall()
-    cur, acc = None, []
 
     def flush():
         if len(acc) >= 2:
@@ -90,6 +93,100 @@ def build_network(con):
     return net, n_trains
 
 
+# ---------- 建图缓存：图是“库文件的函数”，库没变就不用重建 ----------
+_NET_CACHE = {"key": None, "net": None, "n": 0}
+_NET_LOCK = threading.Lock()
+
+
+def _db_signature(con):
+    """(库路径, mtime, 车次数, 停站数) —— 任何一个变了就重建图."""
+    try:
+        row = con.execute("SELECT COUNT(*) c FROM trains").fetchone()
+        n_trains = row[0] if row else -1
+        row = con.execute("SELECT COUNT(*) c FROM stops").fetchone()
+        n_stops = row[0] if row else -1
+    except Exception:
+        n_trains = n_stops = -1
+    path, mtime = None, 0
+    try:
+        for r in con.execute("PRAGMA database_list").fetchall():
+            if r[1] == "main" and r[2]:
+                path = os.path.abspath(r[2])
+                try:
+                    mtime = os.path.getmtime(path)
+                except Exception:
+                    mtime = 0
+                break
+    except Exception:
+        pass
+    return (path, mtime, n_trains, n_stops)
+
+
+def cached_network(con):
+    """带缓存的 build_network：同一份库反复查询只建一次图（约0.5~1秒/7000趟）。
+
+    爬虫入库后 mtime/行数变化，签名对不上自动重建，不会读到旧图。
+    :memory: 等无路径的库不做缓存（每次新建，保证测试互不污染）。
+    """
+    sig = _db_signature(con)
+    if sig[0] is None:
+        return build_network(con)
+    with _NET_LOCK:
+        if _NET_CACHE["key"] == sig:
+            return _NET_CACHE["net"], _NET_CACHE["n"]
+    net, n = build_network(con)
+    with _NET_LOCK:
+        _NET_CACHE["key"], _NET_CACHE["net"], _NET_CACHE["n"] = sig, net, n
+    return net, n
+
+
+def invalidate_network_cache():
+    """显式丢弃建图缓存（爬完一批想立刻用新图时可调；签名机制通常已自动生效）."""
+    with _NET_LOCK:
+        _NET_CACHE["key"] = None
+        _NET_CACHE["net"] = None
+        _NET_CACHE["n"] = 0
+
+
+def _abs_minutes(d, clock_min):
+    """(date, 当日分钟) -> 绝对分钟数（跨天可直接相减，纯整数运算）."""
+    return d.toordinal() * 1440 + clock_min
+
+
+def _from_abs(abs_min):
+    """绝对分钟数 -> datetime（只在产出结果时调用，避免每次扩展都建对象）."""
+    return datetime.combine(date.fromordinal(abs_min // 1440),
+                            dtime(0, 0)) + timedelta(minutes=abs_min % 1440)
+
+
+def _materialize(path):
+    """内部用整数分钟的 path -> 对外带 datetime 的 path（接口不变）."""
+    return tuple((tno, code, f, dst, _from_abs(dep), _from_abs(arr))
+                 for (tno, code, f, dst, dep, arr) in path)
+
+
+def _reachable_to(net, targets):
+    """反向可达性：返回“能（不限时间地）到达 targets 任意一站”的站集合.
+
+    纯结构剪枝，与时刻无关，因此严格安全：不在集合里的站无论怎么换乘都到不了目标，
+    扩展它纯属浪费（冷门长线如 广州->拉萨 45 万次扩展只出 1 条，就是这么白跑的）。
+    含 targets 自身；只沿“站->站”的边反向走，不做时间判断。
+    """
+    rev = defaultdict(set)
+    for frm_st, legs in net.items():
+        for (_dep_c, _dur, _tno, _tcode, dst) in legs:
+            rev[dst].add(frm_st)
+    seen = set(targets)
+    stack = list(targets)
+    while stack:
+        cur = stack.pop()
+        for prev in rev.get(cur, ()):
+            if prev not in seen:
+                seen.add(prev)
+                stack.append(prev)
+    return seen
+
+
 def graph_search(con, frm, too, dates, min_gap=20, max_gap=720, max_transfers=4,
                  max_total=5 * 1440, limit=300, on_progress=None, _net=None,
                  should_stop=None):
@@ -98,10 +195,14 @@ def graph_search(con, frm, too, dates, min_gap=20, max_gap=720, max_transfers=4,
     dates: 出发日期串列表（支持前后天）。limit: 最多返回 itineraries 条。
     返回 [path]，path = ((train_no, code, frm, dst, dep_dt, arr_dt), ...)，
     全局按到达时间升序（堆弹出的天然顺序）。
+
+    性能：内部全部用“绝对分钟整数”运算（原来是 datetime + timedelta，
+    实测 1150 万次 total_seconds 占了 40% 时间），只在产出结果时转 datetime；
+    同城展开的边表按站缓存；入堆前先做分桶剪枝，避免把注定被丢的节点塞进堆。
     """
     pg = on_progress or (lambda f, m: None)
     pg(0.02, "正在建图…")
-    net, n_trains = _net if _net is not None else build_network(con)
+    net, n_trains = _net if _net is not None else cached_network(con)
     pg(0.15, f"图上{n_trains}趟车，开始扩展…")
     too_group = city_group(too)
     base_dates = [parse_date(d) for d in dates]
@@ -110,20 +211,49 @@ def graph_search(con, frm, too, dates, min_gap=20, max_gap=720, max_transfers=4,
     # 种子按同城展开：查“广州”必须含广州南/广州白云发的车（对齐在线同城通查）
     for s0 in city_group(frm):
         for d in base_dates:
+            base = _abs_minutes(d, 0)
             for (dep_c, dur, tno, tcode, dst) in net.get(s0, []):
-                dep_dt = datetime.combine(d, dtime(dep_c // 60, dep_c % 60))
-                arr_dt = dep_dt + timedelta(minutes=dur)
                 if dur > max_total:
                     continue
-                heapq.heappush(pq, (arr_dt, 0, cnt, ((tno, tcode, s0, dst, dep_dt, arr_dt),),
+                dep_abs = base + dep_c
+                arr_abs = dep_abs + dur
+                heapq.heappush(pq, (arr_abs, 0, cnt,
+                                    ((tno, tcode, s0, dst, dep_abs, arr_abs),),
                                     (s0, dst)))
                 cnt += 1
     best = {}
     results, seen_codes = [], set()
     expansions = 0
     exp_cap = max(400000, limit * 1500)  # 上限跟着枚举数走，不卡大数据
+    legs_cache = {}  # 站 -> (按发车钟点排序的边, 发车钟点数组)
+    # 反向可达性预剪：到不了目标站的节点不再扩展（纯结构判断，不影响结果）
+    try:
+        can_reach = _reachable_to(net, too_group)
+    except Exception:
+        can_reach = None
+
+    def expanded(st):
+        """同城展开后的边，按发车钟点排序，供二分只取等待窗内的车。
+
+        原来每次扩展都要把该站两三百条边全扫一遍、逐条试 4 天，
+        这是 25 秒耗时的主要来源；排序后只扫窗口内的十几条。
+        """
+        got = legs_cache.get(st)
+        if got is None:
+            rows = []
+            for s0 in city_group(st):
+                pen = 0 if s0 == st else 60
+                for (dep_c, dur, tno, tcode, dst) in net.get(s0, []):
+                    if can_reach is not None and dst not in can_reach:
+                        continue  # 结构上到不了目标站，扩展它没有意义
+                    rows.append((dep_c, dur, tno, tcode, dst, pen, s0))
+            rows.sort(key=lambda x: x[0])  # 稳定排序：同钟点保持原车次顺序
+            got = (rows, [r[0] for r in rows])
+            legs_cache[st] = got
+        return got
+
     while pq and len(results) < limit and expansions < exp_cap:
-        arr_dt, k, _, path, stations = heapq.heappop(pq)
+        arr_abs, k, _, path, stations = heapq.heappop(pq)
         expansions += 1
         if expansions % 5000 == 0:
             check_stop(should_stop)
@@ -132,67 +262,68 @@ def graph_search(con, frm, too, dates, min_gap=20, max_gap=720, max_transfers=4,
                f"已扩展{expansions}个节点，找到{len(results)}条…")
         st = path[-1][3]
         if st in too_group:
-            key = (tuple(l[1] for l in path), path[0][4].date().isoformat())
+            key = (tuple(l[1] for l in path), path[0][4] // 1440)
             if key not in seen_codes:
                 seen_codes.add(key)
-                results.append(path)
+                results.append(_materialize(path))
             continue
         if k >= max_transfers:
             continue
         # 分桶剪枝：同站同换乘数，按到达（天，小时桶）分别保留最早到达。
         # 桶不能太大：早班车06:31到会把中午13:27到的G1272整个剪掉，
         # 可人家接的是下午的快车（唐山-费县案的教训）。1小时桶是兼顾开销的 sweet spot。
-        bucket = (arr_dt.date().isoformat(), arr_dt.hour)
-        if best.get((st, k) + bucket) is not None and arr_dt >= best[(st, k) + bucket]:
+        bucket = (st, k, arr_abs // 1440, (arr_abs % 1440) // 60)
+        if best.get(bucket) is not None and arr_abs >= best[bucket]:
             continue
-        best[(st, k) + bucket] = arr_dt
+        best[bucket] = arr_abs
         t0 = path[0][4]
         cur_train = path[-1][0]
-        # 换乘按同城展开：到泰山、从泰安走，+60分钟惩罚（对齐 combine_legs）
-        cand_legs = []
-        for s0 in city_group(st):
-            pen = 0 if s0 == st else 60
-            for leg in net.get(s0, []):
-                if leg[2] == cur_train:
-                    continue  # 同车坐过站不算换乘（直达边已存在，不丢信息）
-                cand_legs.append((leg, pen, s0))
-        for (dep_c, dur, tno2, tcode2, dst2), pen, dep_st in cand_legs:
-            if dst2 in stations:
-                continue
-            need, limit_wait = min_gap + pen, max_gap + pen
-            dep_dt = None
-            d = arr_dt.date()
-            for _ in range(4):  # 等待窗内同一班次每天一班，最多看4天
-                cand = datetime.combine(d, dtime(dep_c // 60, dep_c % 60))
-                if (cand - arr_dt).total_seconds() / 60 > limit_wait:
-                    break
-                if (cand - arr_dt).total_seconds() / 60 >= need:
-                    dep_dt = cand
-                    break
-                d += timedelta(days=1)
-            if dep_dt is None:
-                continue
-            arr2 = dep_dt + timedelta(minutes=dur)
-            if (arr2 - t0).total_seconds() / 60 > max_total:
-                continue
-            cnt += 1
-            heapq.heappush(pq, (arr2, k + 1, cnt,
-                                path + ((tno2, tcode2, dep_st, dst2, dep_dt, arr2),),
-                                stations + (dst2,)))
+        legs, clocks = expanded(st)
+        # 等待窗 [arr+min_gap+pen, arr+max_gap+pen]（pen=60 给同城不同站）。
+        # 窗口最长 1500 分钟，所以跨的“日切片”最多 2 个；每个切片内用二分
+        # 取发车钟点落在窗口里的车，再逐条按绝对时间算。
+        for pen in (0, 60):
+            lo = arr_abs + min_gap + pen
+            hi = arr_abs + max_gap + pen
+            for dd in range(lo // 1440, hi // 1440 + 1):
+                dbase = dd * 1440
+                a = max(lo, dbase) - dbase
+                b = min(hi, dbase + 1439) - dbase
+                if a > b:
+                    continue
+                i = bisect_left(clocks, a)
+                j = bisect_right(clocks, b)
+                for idx in range(i, j):
+                    dep_c, dur, tno2, tcode2, dst2, pen2, dep_st = legs[idx]
+                    if pen2 != pen:
+                        continue
+                    if tno2 == cur_train:
+                        continue  # 同车坐过站不算换乘（直达边已存在，不丢信息）
+                    if dst2 in stations:
+                        continue
+                    dep_abs = dbase + dep_c
+                    arr2 = dep_abs + dur
+                    if arr2 - t0 > max_total:
+                        continue
+                    cnt += 1
+                    heapq.heappush(pq, (arr2, k + 1, cnt,
+                                        path + ((tno2, tcode2, dep_st, dst2, dep_abs, arr2),),
+                                        stations + (dst2,)))
     pg(1.0, f"枚举完成：{len(results)}条候选")
     # 直达强制入围：慢直达（如Z14次日到）按到达排序永远进不了前N，
     # 但它们往往是最便宜的，单独补上（才几十条）。
     for d in base_dates:
+        base = _abs_minutes(d, 0)
         for s0 in city_group(frm):
             for (dep_c, dur, tno, tcode, dst) in net.get(s0, []):
                 if dst not in too_group or dur > max_total:
                     continue
-                dep_dt = datetime.combine(d, dtime(dep_c // 60, dep_c % 60))
-                arr_dt = dep_dt + timedelta(minutes=dur)
-                key = ((tcode,), dep_dt.date().isoformat())
+                dep_abs = base + dep_c
+                key = ((tcode,), dep_abs // 1440)
                 if key not in seen_codes:
                     seen_codes.add(key)
-                    results.append(((tno, tcode, s0, dst, dep_dt, arr_dt),))
+                    results.append(_materialize(((tno, tcode, s0, dst, dep_abs,
+                                                  dep_abs + dur),)))
     return results
 
 
@@ -340,7 +471,19 @@ def run_graph_search(from_kw, to_kw, date, max_transfers=2, min_gap=20, max_gap=
         con.close()
     combos = [path_to_combo(p) for p in paths]
     from .search import enrich_names
-    enrich_names(combos, {})
+    # 图里存了站名（stops.name），优先用它补名：站名库降级时也不会显示 TAK/TMK
+    try:
+        gnames = {}
+        con2 = graphdb.connect(db_path)
+        try:
+            for r in con2.execute("SELECT DISTINCT station, name FROM stops"
+                                  " WHERE name IS NOT NULL AND name<>''"):
+                gnames[r["station"]] = r["name"]
+        finally:
+            con2.close()
+    except Exception:
+        gnames = {}
+    enrich_names(combos, {}, graph_names=gnames)
     n_cand = len(combos)
     if must_middle and str(must_middle).strip():
         mname, mcode = api.resolve_station(str(must_middle).strip())

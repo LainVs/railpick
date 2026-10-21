@@ -29,7 +29,7 @@ SAME_CITY = [
     {"SHH", "SNH", "AOH", "SXH"},                # 上海
     {"GZQ", "IZQ", "GGQ", "GBA"},              # 广州/南/东/白云（GBA不同站短接要罚60分钟）
     {"CDW", "ICW", "CNW"},                      # 成都
-    {"CQW", "CUW", "CQK"},                      # 重庆
+    {"CQW", "CUW", "CXW", "COE", "CRW"},       # 重庆/北/西/东/南（CQK 是废弃码，实际是 CXW）
     {"XAY", "EAY"},                             # 西安
     {"HZH", "HGH", "HHC"},                      # 杭州
     {"NJH", "NKH"},                             # 南京
@@ -47,7 +47,7 @@ SAME_CITY = [
     {"SYT", "SBT"},                             # 沈阳/沈阳北
     {"NCG", "NXG"},                             # 南昌/南昌西
     {"GIW", "KQW"},                             # 贵阳/贵阳北
-    {"KMM", "KXM"},                             # 昆明/昆明南
+    {"KMM", "KOM"},                             # 昆明/昆明南（KXM 是废弃码，实际是 KOM）
     {"LZJ", "LAJ"},                             # 兰州/兰州西
     {"TMK", "TAK"},                             # 泰安/泰山（唐山-费县案：K 到泰山、G 到泰安）
     {"TSP", "FUP"},                             # 唐山/唐山北（Z14到唐山北，查唐山必须认）
@@ -149,11 +149,26 @@ def station_name(code, smap=None):
     return code
 
 
-def enrich_names(combos, smap):
+def enrich_names(combos, smap, graph_names=None):
+    """给每段补 from_name/to_name。
+
+    graph_names：{站码: 站名}，来自本地时刻表图（stops.name）。
+    优先级：余票接口 map > 图库名字 > 站名库 > 站码。
+    图库名字很关键：站名库降级（网络抖动只剩 75 站）时，
+    图里明明存了“泰山/泰安”，之前却直接显示站码 TAK/TMK。
+    """
+    def pick(code):
+        if not code:
+            return code
+        if smap and code in smap:
+            return smap[code]
+        if graph_names and code in graph_names:
+            return graph_names[code]
+        return station_name(code)
     for c in combos:
         for l in c["legs"]:
-            l["from_name"] = station_name(l.get("from_code", ""), smap)
-            l["to_name"] = station_name(l.get("to_code", ""), smap)
+            l["from_name"] = pick(l.get("from_code", ""))
+            l["to_name"] = pick(l.get("to_code", ""))
 
 
 # 搜索广度档位：中转是自己组的，规模越大票越多，但打 12306 次数越多、越慢、越容易限流
@@ -578,11 +593,17 @@ def search_combos(from_kw, to_kw, date, max_transfer=1, min_gap=20, max_gap=240,
         pg(0.58, f"配出{len(pairs1)}对衔接，正在查分段票价…")
         ex_p = ThreadPoolExecutor(max_workers=4)
         try:
-            price_futs = {}
-            cap_pairs = pairs1[:cfg["cap1"]]
-            for i, (a, b, w) in enumerate(cap_pairs):
-                price_futs[ex_p.submit(leg_price, a, a["dep_date"], price_cache)] = ("a", i)
-                price_futs[ex_p.submit(leg_price, b, b["dep_date"], price_cache)] = ("b", i)
+            # 按分段键去重再提交：同一趟 A 段车会出现在几十个 pair 里，
+            # 4 线程并发时 price_cache 还没写入，会重复打同一个 12306 请求
+            # （省下的请求直接换成更少的限流风险）。
+            todo_price = {}
+            for a, b, _w in pairs1[:cfg["cap1"]]:
+                for leg in (a, b):
+                    k = (leg["train_no"], leg["from_no"], leg["to_no"], leg["dep_date"])
+                    if k not in price_cache and k not in todo_price:
+                        todo_price[k] = (leg, leg["dep_date"])
+            price_futs = {ex_p.submit(leg_price, leg, day, price_cache): k
+                          for k, (leg, day) in todo_price.items()}
             done_p = 0
             for f in consume_ordered(price_futs, should_stop):
                 done_p += 1
@@ -645,29 +666,63 @@ def search_combos(from_kw, to_kw, date, max_transfer=1, min_gap=20, max_gap=240,
                     anchored = [anchor(t, qd) for t in raw]
                 except Exception:
                     anchored = []
-                tmp.setdefault((m1["code"], m2["code"])).extend(anchored)
+                # setdefault 必须带默认值：单参数版返回 None，曾导致 2 次中转 100% 崩
+                tmp.setdefault((m1["code"], m2["code"]), []).extend(anchored)
             for k, v in tmp.items():
                 mid_legs[k] = sorted(v, key=lambda x: x["_dep"])  # 不截断，配对时锚定取
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
         # 用已有 A->M1 与 M2->B 拼接（同样锚定配对，避免早班截断）
+        # 注意：配对必须在 for 循环内——上一次提交把缩进丢了，
+        # 结果只用最后一对中转站、且必触发 UnboundLocalError。
+        trips = []
         for (c1, c2), mids in mid_legs.items():
             check_stop(should_stop)
             list_a = spread_sample(leg_map.get(("A", c1), []), 6)
             list_b = leg_map.get(("B", c2), [])
-        for a, mid, w1 in pair_legs(list_a, mids, min_gap, max_gap, per_a=3):
+            for a, mid, w1 in pair_legs(list_a, mids, min_gap, max_gap, per_a=3):
+                if len(trips) > cfg["cap2"]:
+                    break
+                for _, b, w2 in pair_legs([mid], list_b, min_gap, max_gap, per_a=3):
+                    trips.append((a, mid, b, w1, w2))
+                    if len(trips) > cfg["cap2"]:
+                        break
+        # 2 次中转的票价也走线程池：原来在主线程里逐条串行查，
+        # 既堵住进度上报，也让取消要等很久才生效。
+        if with_price and trips:
+            ex_p2 = ThreadPoolExecutor(max_workers=4)
+            try:
+                todo_price = {}
+                for a, mid, b, _w1, _w2 in trips:
+                    for leg in (a, mid, b):
+                        k = (leg["train_no"], leg["from_no"], leg["to_no"], leg["dep_date"])
+                        if k not in price_cache and k not in todo_price:
+                            todo_price[k] = (leg, leg["dep_date"])
+                futs = {ex_p2.submit(leg_price, leg, day, price_cache): k
+                        for k, (leg, day) in todo_price.items()}
+                done_p = 0
+                for f in consume_ordered(futs, should_stop):
+                    done_p += 1
+                    try:
+                        f.result()
+                    except Exception:
+                        pass
+                    if done_p % 10 == 0 or done_p >= len(futs):
+                        pg(0.86 + 0.1 * done_p / max(1, len(futs)),
+                           f"查2次中转票价 {done_p}/{len(futs)}…")
+            finally:
+                ex_p2.shutdown(wait=False, cancel_futures=True)
+        for a, mid, b, w1, w2 in trips:
+            check_stop(should_stop)
+            pa, pan = price_cache.get((a["train_no"], a["from_no"], a["to_no"], a["dep_date"]), (None, None))
+            pm, pmn = price_cache.get((mid["train_no"], mid["from_no"], mid["to_no"], mid["dep_date"]), (None, None))
+            pb, pbn = price_cache.get((b["train_no"], b["from_no"], b["to_no"], b["dep_date"]), (None, None))
+            aa = dict(a); aa["price"] = pa; aa["price_name"] = pan
+            mm = dict(mid); mm["price"] = pm; mm["price_name"] = pmn
+            bb = dict(b); bb["price"] = pb; bb["price_name"] = pbn
+            combos.append(build_combo([aa, mm, bb], [pa, pm, pb], [w1, w2]))
             if len(combos) > cfg["cap2"]:
                 break
-            for _, b, w2 in pair_legs([mid], list_b, min_gap, max_gap, per_a=3):
-                pa, pan = leg_price(a, a["dep_date"], price_cache) if with_price else (None, None)
-                pm, pmn = leg_price(mid, mid["dep_date"], price_cache) if with_price else (None, None)
-                pb, pbn = leg_price(b, b["dep_date"], price_cache) if with_price else (None, None)
-                aa = dict(a); aa["price"] = pa; aa["price_name"] = pan
-                mm = dict(mid); mm["price"] = pm; mm["price_name"] = pmn
-                bb = dict(b); bb["price"] = pb; bb["price_name"] = pbn
-                combos.append(build_combo([aa, mm, bb], [pa, pm, pb], [w1, w2]))
-                if len(combos) > cfg["cap2"]:
-                    break
 
     enrich_names(combos, smap)
     pg(0.96, "排序汇总…")

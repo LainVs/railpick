@@ -13,8 +13,12 @@ class Cancelled(Exception):
 
 
 def _purge():
+    """清理过期任务。只清已结束的：运行中的任务哪怕很久没更新进度也不能删，
+    否则它跑完后 finish() 找不到记录，结果被静默丢弃（前端永远等到超时）。"""
     now = time.time()
     for jid, j in list(_jobs.items()):
+        if j.get("state") == "running":
+            continue
         if now - j["ts"] > TTL:
             _jobs.pop(jid, None)
 

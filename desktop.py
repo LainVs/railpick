@@ -1046,7 +1046,13 @@ class App:
             P.append((f"   票价约{fmt_price(l.get('price'))}{l.get('price_name') or ''}｜{seats}", "price"))
             if j < len(c["legs"]) - 1:
                 mid = c["legs"][j].get("to_name") or c["legs"][j].get("to_code")
-                P.append((f"   ▼ {mid}换乘 {c['waits'][j]}分钟", "warn"))
+                nxt = c["legs"][j + 1]
+                if nxt.get("from_code") and nxt.get("from_code") != l.get("to_code"):
+                    # 同城不同站（泰山->泰安）：不标出来会像行程断了
+                    P.append((f"   ▼ {mid}下车 → {nxt.get('from_name') or nxt.get('from_code')}上车"
+                              f"（同城异站，换乘{c['waits'][j]}分钟，需市内交通）", "warn"))
+                else:
+                    P.append((f"   ▼ {mid}换乘 {c['waits'][j]}分钟", "warn"))
         P.append(("-" * 46, "normal"))
         P.append(("购票：去12306 App/官网按上面分段分别购票（或用“中转/接续换乘”页直接出票）。", "normal"))
         P.append(("注意：同站换乘最稳（预留30分钟+）；同城不同站预留1小时+市内交通；夜车看清+1天。", "warn"))
@@ -1064,7 +1070,12 @@ class App:
                      f"（约{fmt_price(l.get('price'))}{l.get('price_name') or ''}）")
             if j < len(c["legs"]) - 1:
                 mid = c["legs"][j].get("to_name") or c["legs"][j].get("to_code")
-                L.append(f"   {mid}换乘{c['waits'][j]}分钟")
+                nxt = c["legs"][j + 1]
+                if nxt.get("from_code") and nxt.get("from_code") != l.get("to_code"):
+                    L.append(f"   {mid}下车→{nxt.get('from_name') or nxt.get('from_code')}上车"
+                             f"（同城异站，换乘{c['waits'][j]}分钟，需市内交通）")
+                else:
+                    L.append(f"   {mid}换乘{c['waits'][j]}分钟")
         L.append("去12306分段购票或走接续换乘；同城换乘预留1小时；夜车看清日期。")
         return "\n".join(L)
 

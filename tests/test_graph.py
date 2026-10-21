@@ -107,7 +107,13 @@ from backend.crawler import build_ods, resolve_codes
 o = build_ods(["TSP"], seed=["BJP", "TSP", "SHH"])
 assert o[0] == ("TSP", "BJP") and o[1] == ("BJP", "TSP"), o[:4]
 assert o[2] == ("TSP", "SHH") and o[3] == ("SHH", "TSP"), o[:4]
-assert len(o) == len(set(o)) == 6, o
+# 优先站的进出对必须整体排在种子对之前，且无重复。
+# （不能断言固定条数：优先站会按地理补充顺路邻居，条数随地理表变化）
+seed_pairs = {("BJP", "SHH"), ("SHH", "BJP")}
+first_seed_idx = min(i for i, od in enumerate(o) if od in seed_pairs)
+assert all("TSP" in od for od in o[:first_seed_idx]), o[:first_seed_idx + 2]
+assert len(o) == len(set(o)), "OD 有重复"
+assert len(o) > 4, o
 assert build_ods(None, seed=["A", "B"]) == [("A", "B"), ("B", "A")]
 assert resolve_codes(["BJP", "  "]) == ["BJP"]  # 代码直通（名字解析走网络，这里不测）
 print("7 ok: priority ods")
@@ -179,4 +185,41 @@ assert len(m11) == 7 and got11[-1] == "南京南", got11  # 经停6席+枢纽1�
 assert got11[:6] == ["测试站0000", "测试站0001", "测试站0002", "测试站0003",
                      "测试站0100", "测试站0101"], got11
 print("11 ok: slot budget")
+
+# ---- 12) 优先站要带上顺路邻居：只跟 20 个种子站配对，会漏掉真正的换乘枢纽 ----
+# 回归：用户填“唐山”，图里永远只有京沪京广干线车，泰安/徐州/曲阜东这些
+# 唐山->费县最顺的中转站一个都爬不到（因为不在种子名单里）。
+import backend.c12306 as _api
+_real_resolve = _api.resolve_station
+_real_load = _api.load_stations
+try:
+    _api.load_stations = lambda *a, **k: [
+        {"name": "唐山", "code": "TSP"}, {"name": "北京", "code": "BJP"},
+        {"name": "上海", "code": "SHH"}, {"name": "济南", "code": "JNK"},
+        {"name": "泰安", "code": "TMK"}, {"name": "徐州", "code": "XCH"},
+        {"name": "曲阜东", "code": "QAK"}, {"name": "天津", "code": "TJP"},
+    ]
+    _api.resolve_station = lambda kw: next(
+        ((s["name"], s["code"]) for s in _api.load_stations()
+         if s["name"] == (kw or "").strip()), (None, None))
+    _api._stations_cache = {"list": _api.load_stations(), "by_name": {},
+                            "by_code": {"TSP": {"name": "唐山"}},
+                            "ts": 0, "fallback": False}
+    o12 = build_ods(["TSP"], seed=["BJP", "SHH"])
+    flat = {c for od in o12 for c in od}
+    # 济南/泰安/徐州 都在唐山的地理走廊上，必须被带进 OD（否则永远爬不到）
+    for code in ("JNK", "TMK", "XCH"):
+        assert code in flat, f"顺路邻居 {code} 没进 OD：{o12}"
+    # 种子对仍然保留
+    assert ("BJP", "SHH") in o12, o12
+    # 无重复
+    assert len(o12) == len(set(o12)), "OD 有重复"
+    print("12 ok: priority station pulls in corridor neighbours")
+finally:
+    _api.resolve_station = _real_resolve
+    _api.load_stations = _real_load
+    try:
+        _api.load_stations()
+    except Exception:
+        pass
 print("GRAPH CHECKS PASSED")

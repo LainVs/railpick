@@ -37,6 +37,13 @@ def connect(path=None):
     con.row_factory = sqlite3.Row
     with _lock:
         con.execute("PRAGMA busy_timeout=30000")
+        # WAL：读写不互斥。默认的 rollback journal 下，爬虫写库会把并发查询的读卡住，
+        # 甚至两边都写时直接 "database is locked"（并发压测必现）。
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            pass
         con.executescript(SCHEMA)
         # 老库迁移：crawl_od 可能没有 fresh 列
         cols = [r[1] for r in con.execute("PRAGMA table_info(crawl_od)").fetchall()]
@@ -92,16 +99,27 @@ def upstream(con, station, limit=200):
 
 
 def common_middles(con, frm, too, limit=8):
-    """A->M->B 的 M 候选：交集按两边频度之和排序。"""
+    """A->M->B 的 M 候选，按“瓶颈频度”排序.
+
+    瓶颈频度 = min(从A到M的车次数, 从M到B的车次数)：
+    中转站真正的约束是两边**较少**的那一头。原来用 down+up 求和，
+    会选出“A侧一堆车、B侧只有1趟”的假枢纽（唐山->费县案：济南西 down=17/up=2
+    排第一，实际只有 2 趟车能接上）。求和只作为同分时的次序。
+    """
     down = downstream(con, frm)
     if not down:
         return []
     up = upstream(con, too)
     if not up:
         return []
-    scored = [(down[m] + up[m], m) for m in down if m in up and m not in (frm, too)]
+    scored = []
+    for m in down:
+        if m not in up or m in (frm, too):
+            continue
+        d, u = down[m], up[m]
+        scored.append((min(d, u), d + u, m))
     scored.sort(reverse=True)
-    return [m for _, m in scored[:limit]]
+    return [m for _, _, m in scored[:limit]]
 
 
 def mark_od(con, frm, too, day, fresh=0):
