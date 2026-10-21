@@ -168,6 +168,42 @@ for label, got, want, ok in results:
 assert not bad, f"{len(bad)} 项前端逻辑检查失败"
 print(f"2 ok: frontend logic ({len(results)} checks)")
 
+# ---- 7) 归档浏览：标签页选择器必须压过 hover ----
+# 回归：激活项曾是灰的、未激活的是墨绿——.gtab.on 与 .gtab:hover 优先级反了
+import re as _re
+_html = open(os.path.join(BASE, "frontend", "index.html"), encoding="utf-8").read()
+_css = _re.search(r"<style>([\s\S]*?)</style>", _html).group(1)
+
+
+def _spec(sel):
+    ids = sel.count("#")
+    cls = len(_re.findall(r"\.[A-Za-z0-9_-]+", sel)) + len(_re.findall(r":(?:hover|on|focus)", sel))
+    el = len(_re.findall(r"(?<![.#\w:-])([a-z]+)(?![\w-])", sel))
+    return (ids, cls, el)
+
+
+_rules = {}
+for _m in _re.finditer(r"([^{}]+)\{([^{}]*)\}", _css):
+    _sel = _m.group(1).strip().replace("\n", " ")
+    if "gtab" in _sel and "color" in _m.group(2):
+        _rules[_sel] = _m.group(2)
+
+_on = [s for s in _rules if s.startswith(".gtab.on")]
+_ho = [s for s in _rules if s == ".gtab:hover"]
+assert _on and _ho, (_on, _ho)
+assert _spec(_on[0]) >= _spec(_ho[0]), f"激活项优先级低于 hover: {_on[0]} vs {_ho[0]}"
+print("7 ok: gtab active beats hover")
+
+# ---- 8) 归档浏览面板：5 个标签 + 对应 pane 齐全 ----
+for _tab in ("crawl", "runs", "train", "station", "recent"):
+    assert f'data-tab="{_tab}"' in _html, f"缺标签 {_tab}"
+    assert f'data-pane="{_tab}"' in _html, f"缺面板 {_tab}"
+assert "/api/graph/runs" in _html, "前端没接爬取记录接口"
+assert "/api/graph/train" in _html, "前端没接查车次接口"
+assert "/api/graph/station" in _html, "前端没接查车站接口"
+assert "/api/graph/recent" in _html, "前端没接最近入库接口"
+print("8 ok: archive panes wired to all 4 endpoints")
+
 # ---- 清理 ----
 try:
     shutil.rmtree(tmpdir, ignore_errors=True)

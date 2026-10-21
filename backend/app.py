@@ -171,9 +171,93 @@ def graph_stats():
     try:
         con = graphdb.connect()
         try:
-            return graphdb.stats(con)
+            out = graphdb.stats(con)
+            # 归档信息：库文件大小、最近一次爬取、自适应速率
+            try:
+                out["rate_interval"] = graphdb.meta_get(con, "rate_interval", "?")
+                runs = graphdb.recent_runs(con, 1)
+                out["last_run"] = ({"ts": runs[0][0], "requests": runs[0][1],
+                                    "new_trains": runs[0][2], "priority": runs[0][3],
+                                    "day": runs[0][4]}
+                                   if runs else None)
+            except Exception:
+                pass
+            return out
         finally:
             con.close()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/graph/runs")
+def graph_runs(limit: int = Query(default=20, ge=1, le=200)):
+    """爬取归档：每次爬取的记录（时间/请求数/新增车次/优先站）."""
+    from . import graphdb
+    try:
+        con = graphdb.connect()
+        try:
+            rows = graphdb.recent_runs(con, limit)
+        finally:
+            con.close()
+        return {"runs": [{"ts": r[0], "requests": r[1], "new_trains": r[2],
+                          "priority": r[3], "day": r[4]} for r in rows]}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/graph/train")
+def graph_train(code: str = Query(...)):
+    """按车次查归档经停：支持车次号（如 G1）或内部车次号."""
+    from . import graphdb
+    from . import c12306 as api
+    try:
+        con = graphdb.connect()
+        try:
+            rows = graphdb.train_detail(con, code.strip())
+        finally:
+            con.close()
+        out = []
+        for st_code, name, arrive, depart in rows:
+            out.append({"code": st_code, "name": name,
+                        "arrive": arrive or "", "depart": depart or ""})
+        return {"code": code.strip(), "count": len(out), "stops": out}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/graph/station")
+def graph_station(q: str = Query(...), limit: int = Query(default=80, ge=1, le=500)):
+    """按车站查归档过路车（输入站名/拼音/站码都行）."""
+    from . import graphdb
+    from . import c12306 as api
+    name, code = api.resolve_station(q)
+    if not code:
+        return JSONResponse({"error": f"车站「{q}」找不到"}, status_code=400)
+    try:
+        con = graphdb.connect()
+        try:
+            rows = graphdb.trains_at(con, code, limit)
+        finally:
+            con.close()
+        return {"station": {"name": name, "code": code},
+                "count": len(rows),
+                "trains": [{"train_no": tno, "code": c or tno} for tno, c in rows]}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/graph/recent")
+def graph_recent(limit: int = Query(default=30, ge=1, le=200)):
+    """最近入库的车次（按入库顺序倒序）."""
+    from . import graphdb
+    try:
+        con = graphdb.connect()
+        try:
+            rows = graphdb.recent_trains(con, limit)
+        finally:
+            con.close()
+        return {"trains": [{"train_no": t, "code": c or t, "updated": u}
+                           for t, c, u in rows]}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

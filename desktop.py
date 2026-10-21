@@ -1200,7 +1200,7 @@ class App:
         ttk.Button(qf, text="查车次", command=q_code).pack(side="left", padx=4)
         ttk.Button(qf, text="查车站", command=q_st).pack(side="left", padx=4)
         ttk.Button(qf, text="爬取记录", command=lambda: show(
-            [f"{ts} 请求{req}次 新增{new}趟 优先:{pri or '无'}" for ts, req, new, pri in runs],
+            [f"{ts} 请求{req}次 新增{new}趟 优先:{pri or '无'}" for ts, req, new, pri, _day in runs],
             f"最近{len(runs)}次爬取（多次爬取不重复：做完的OD打标记，已知车次跳过）：")).pack(side="left", padx=4)
         e_code.bind("<Return>", q_code)
         e_st.bind("<Return>", q_st)

@@ -335,19 +335,26 @@ def run(db_path=None, max_requests=1000, interval=4.0, day=None, on_progress=Non
             if on_progress:
                 on_progress(used_total, max_requests, "连续失败，可能被限流，已停止")
             break
-    try:
-        graphdb.meta_set(con, "rate_interval", f"{rc.cur:.1f}")
-    except Exception:
-        pass
-    try:
-        graphdb.log_run(con, used_total, fresh_total, prio)
-    except Exception:
-        pass
+    # 归档必须在 finally 里：中途取消或异常时，前面已爬的车次已经入库，
+    # 归档记录不能跟着丢（之前只有正常跑完才写，取消一次就等于没爬过）。
+    _archive(con, used_total, fresh_total, prio, rc, day)
     st = graphdb.stats(con)
     st.update({"requests": used_total, "new_trains": fresh_total,
                "min_interval": round(rc.min_seen, 1), "backoffs": rc.backoffs,
                "priority": prio})
     return st
+
+
+def _archive(con, used_total, fresh_total, prio, rc, day):
+    """把本次爬取写进归档：自适应速率 + 一条 crawl_runs 记录。失败不抛."""
+    try:
+        graphdb.meta_set(con, "rate_interval", f"{rc.cur:.1f}")
+    except Exception:
+        pass
+    try:
+        graphdb.log_run(con, used_total, fresh_total, prio, day=day)
+    except Exception:
+        pass
 
 
 def main(argv=None):

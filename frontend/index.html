@@ -535,6 +535,45 @@ dialog.graphdlg::backdrop{background:rgba(22,33,28,.42);backdrop-filter:blur(3px
 @keyframes gslide{to{background-position:56px 0}}
 .grow{display:flex;gap:8px;flex-wrap:wrap}
 
+/* 归档浏览：标签页 + 表格 */
+.gtabs{
+  display:flex;gap:2px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line);margin-bottom:15px;
+}
+.gtab{
+  border:0;background:none;cursor:pointer;position:relative;
+  padding:8px 13px 10px;font-size:12.5px;color:var(--muted);
+  border-radius:6px 6px 0 0;transition:color .16s,background .16s;
+}
+.gtab:hover{background:var(--surface-2);color:var(--ink)}
+.gtab.on,.gtab.on:hover{color:var(--rail);font-weight:600}
+.gtab.on::after{
+  content:"";position:absolute;left:13px;right:13px;bottom:-1px;height:2px;
+  background:var(--rail);border-radius:2px 2px 0 0;
+}
+.gpane[hidden]{display:none}
+.gtable{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.gempty{padding:26px 16px;text-align:center;color:var(--faint);font-size:12.5px}
+.grow-line{
+  display:grid;grid-template-columns:1fr auto;gap:10px;align-items:baseline;
+  padding:9px 13px;border-bottom:1px solid var(--line);font-size:12.5px;
+}
+.grow-line:last-child{border-bottom:0}
+.grow-line:hover{background:var(--surface-2)}
+.grow-line b{font:600 12.5px/1.3 var(--mono);color:var(--ink)}
+.grow-line small{font:400 11px/1.3 var(--mono);color:var(--faint);white-space:nowrap}
+.grow-line .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
+.grow-line .num{font:500 12px/1.3 var(--mono);color:var(--rail)}
+.gstop{
+  display:grid;grid-template-columns:26px 1fr auto;gap:10px;
+  padding:7px 13px;border-bottom:1px solid var(--line);font-size:12.5px;align-items:baseline;
+}
+.gstop:last-child{border-bottom:0}
+.gstop .i{font:400 10.5px/1 var(--mono);color:var(--faint);text-align:right}
+.gstop .nm{color:var(--ink)}
+.gstop .tm{font:400 11.5px/1 var(--mono);color:var(--muted);white-space:nowrap}
+.gstop .tm em{font-style:normal;color:var(--faint);margin:0 3px}
+
 /* ---------- 动效 ---------- */
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
@@ -829,40 +868,88 @@ dialog.graphdlg::backdrop{background:rgba(22,33,28,.42);backdrop-filter:blur(3px
   </div>
 </main>
 
-<!-- ③ 时刻表图（次要维护功能，独立面板） -->
+<!-- ③ 时刻表图：爬取 + 归档浏览（低频维护功能，独立面板） -->
 <dialog class="graphdlg" id="graphDialog">
   <div class="gdlg-head">
     <div>
-      <h3>时刻表图</h3>
-      <p>后台礼貌爬取公开经停站，越攒中转候选越准。约 4 秒 1 次，可随时取消，绝不抢正常查询的配额。</p>
+      <h3>时刻表图 · 数据归档</h3>
+      <p>后台礼貌爬取公开经停站，落库成时刻表图。约 4 秒 1 次，可随时取消，绝不抢正常查询的配额。</p>
     </div>
     <button class="gdlg-close" id="closeGraph" aria-label="关闭">✕</button>
   </div>
   <div class="gdlg-body">
     <div class="gstats" id="gstats">加载中…</div>
-    <div class="gform">
-      <div class="adv-item">
-        <label for="gfrom">优先站</label>
-        <input id="gfrom" placeholder="如 唐山，北京" autocomplete="off">
+
+    <div class="gtabs" role="tablist">
+      <button class="gtab on" data-tab="crawl" role="tab">爬取</button>
+      <button class="gtab" data-tab="runs" role="tab">爬取记录</button>
+      <button class="gtab" data-tab="train" role="tab">查车次</button>
+      <button class="gtab" data-tab="station" role="tab">查车站</button>
+      <button class="gtab" data-tab="recent" role="tab">最近入库</button>
+    </div>
+
+    <!-- 爬取 -->
+    <div class="gpane" data-pane="crawl">
+      <div class="gform">
+        <div class="adv-item">
+          <label for="gfrom">优先站</label>
+          <input id="gfrom" placeholder="如 唐山，北京" autocomplete="off">
+        </div>
+        <div class="adv-item">
+          <label for="gphase">爬取范围</label>
+          <select id="gphase">
+            <option value="auto">自动</option>
+            <option value="mesh">仅干线</option>
+            <option value="fanout">仅地级</option>
+          </select>
+        </div>
+        <div class="adv-item">
+          <label for="gmax">限次</label>
+          <input id="gmax" value="1000" inputmode="numeric" title="0 = 无限">
+        </div>
       </div>
-      <div class="adv-item">
-        <label for="gphase">爬取范围</label>
-        <select id="gphase">
-          <option value="auto">自动</option>
-          <option value="mesh">仅干线</option>
-          <option value="fanout">仅地级</option>
-        </select>
-      </div>
-      <div class="adv-item">
-        <label for="gmax">限次</label>
-        <input id="gmax" value="1000" inputmode="numeric" title="0 = 无限">
+      <div class="gbar"><span id="gfill"></span></div>
+      <div class="gmsg" id="gmsg">填常用站，这些站的进出会先爬；限次填 0 表示一直跑到取消。</div>
+      <div class="grow">
+        <button class="btn primary" id="gcrawl">开始爬取</button>
+        <button class="btn" id="gcancel" hidden>取消</button>
       </div>
     </div>
-    <div class="gbar"><span id="gfill"></span></div>
-    <div class="gmsg" id="gmsg">填常用站，这些站的进出会先爬；限次填 0 表示一直跑到取消。</div>
-    <div class="grow">
-      <button class="btn primary" id="gcrawl">开始爬取</button>
-      <button class="btn" id="gcancel" hidden>取消</button>
+
+    <!-- 爬取记录 -->
+    <div class="gpane" data-pane="runs" hidden>
+      <div class="gmsg" style="margin-bottom:10px">每次爬取都会归档：时间、请求数、新增车次、优先站。取消或中途失败也会记一条。</div>
+      <div class="gtable" id="runsTable"><div class="gempty">还没有爬取记录</div></div>
+    </div>
+
+    <!-- 查车次 -->
+    <div class="gpane" data-pane="train" hidden>
+      <div class="gform">
+        <div class="adv-item">
+          <label for="gtrain">车次</label>
+          <input id="gtrain" placeholder="如 G1 / T244" autocomplete="off">
+        </div>
+        <button class="btn primary" id="gtrainGo">查经停</button>
+      </div>
+      <div class="gtable" id="trainResult"><div class="gempty">输入车次号，查归档里的全程经停站</div></div>
+    </div>
+
+    <!-- 查车站 -->
+    <div class="gpane" data-pane="station" hidden>
+      <div class="gform">
+        <div class="adv-item">
+          <label for="gstation">车站</label>
+          <input id="gstation" placeholder="如 唐山 / 北京南" autocomplete="off">
+        </div>
+        <button class="btn primary" id="gstationGo">查过路车</button>
+      </div>
+      <div class="gtable" id="stationResult"><div class="gempty">输入站名，查归档里经过该站的所有车次</div></div>
+    </div>
+
+    <!-- 最近入库 -->
+    <div class="gpane" data-pane="recent" hidden>
+      <div class="gmsg" style="margin-bottom:10px">按入库顺序倒序，最近爬到的车在最前。</div>
+      <div class="gtable" id="recentTable"><div class="gempty">加载中…</div></div>
     </div>
   </div>
 </dialog>
@@ -886,22 +973,120 @@ fetch('/api/health').then(r=>r.json()).then(()=>{$('health').textContent='12306 
   .catch(()=>{$('health').textContent='后端未启动';$('dot').classList.add('bad')});
 loadGraphStats();
 
-// ---------- 时刻表图：面板 + 一键爬取 ----------
+// ---------- 时刻表图：面板 + 爬取 + 归档浏览 ----------
 let crawlTimer=null;
 const dlg=$('graphDialog');
-$('openGraph').onclick=()=>{ if(dlg.showModal)dlg.showModal(); else dlg.setAttribute('open','') ; loadGraphStats(); };
+$('openGraph').onclick=()=>{
+  if(dlg.showModal)dlg.showModal(); else dlg.setAttribute('open','');
+  loadGraphStats();
+  // 打开时刷新当前标签页的数据
+  const active=document.querySelector('.gtab.on');
+  if(active)loadPane(active.dataset.tab);
+};
 $('closeGraph').onclick=()=>dlg.close();
 dlg.addEventListener('click',e=>{ if(e.target===dlg) dlg.close(); });
+
+// 标签页切换
+document.querySelectorAll('.gtab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.gtab').forEach(x=>x.classList.toggle('on',x===t));
+  document.querySelectorAll('.gpane').forEach(p=>p.hidden=p.dataset.pane!==t.dataset.tab);
+  loadPane(t.dataset.tab);
+});
+
+function loadPane(tab){
+  if(tab==='runs')loadRuns();
+  else if(tab==='recent')loadRecent();
+}
 
 async function loadGraphStats(){
   try{
     const s=await fetch('/api/graph/stats').then(r=>r.json());
-    if(s.trains!=null){
-      $('gstats').innerHTML=`已收录 <b>${s.trains}</b> 趟车 · <b>${s.stations}</b> 个站 · <b>${s.ods}</b> 组 OD`+
-        (s.coverage!=null?` · 覆盖率 <b>${s.coverage}%</b>`:'');
-    }
+    if(s.error){$('gstats').textContent='图库不可用：'+s.error;return}
+    const last=s.last_run;
+    const lastTxt=last?` · 上次 ${last.ts} 采 ${last.requests} 次 +${last.new_trains} 趟`:'';
+    $('gstats').innerHTML=
+      `已归档 <b>${s.trains}</b> 趟车 · <b>${s.stations}</b> 个站 · <b>${s.ods}</b> 组 OD`+
+      (s.coverage!=null?` · 覆盖率 <b>${s.coverage}%</b>`:'')+
+      (s.rate_interval?`<br><span style="color:var(--faint)">自适应间隔 ${s.rate_interval} 秒/次${lastTxt}</span>`:'');
   }catch(e){$('gstats').textContent='时刻表图暂不可用'}
 }
+
+async function loadRuns(){
+  const box=$('runsTable');
+  box.innerHTML='<div class="gempty">加载中…</div>';
+  try{
+    const r=await fetch('/api/graph/runs?limit=40').then(r=>r.json());
+    if(r.error){box.innerHTML=`<div class="gempty">读取失败：${r.error}</div>`;return}
+    if(!r.runs.length){box.innerHTML='<div class="gempty">还没有爬取记录。去「爬取」标签跑一次。</div>';return}
+    box.innerHTML=r.runs.map(x=>`
+      <div class="grow-line">
+        <div>
+          <b>${x.ts}</b>
+          <div class="sub">优先站 ${x.priority||'（无）'}${x.day?` · 数据日期 ${x.day}`:''}</div>
+        </div>
+        <div class="num">${x.requests} 次 · +${x.new_trains} 趟</div>
+      </div>`).join('');
+  }catch(e){box.innerHTML='<div class="gempty">网络错误</div>'}
+}
+
+async function loadRecent(){
+  const box=$('recentTable');
+  box.innerHTML='<div class="gempty">加载中…</div>';
+  try{
+    const r=await fetch('/api/graph/recent?limit=60').then(r=>r.json());
+    if(r.error){box.innerHTML=`<div class="gempty">读取失败：${r.error}</div>`;return}
+    if(!r.trains.length){box.innerHTML='<div class="gempty">图里还没有车次，先爬一次。</div>';return}
+    box.innerHTML=r.trains.map(x=>`
+      <div class="grow-line">
+        <div><b>${x.code}</b><div class="sub">入库 ${x.updated||'—'}</div></div>
+      </div>`).join('');
+  }catch(e){box.innerHTML='<div class="gempty">网络错误</div>'}
+}
+
+// 查车次经停
+$('gtrainGo').onclick=async()=>{
+  const kw=$('gtrain').value.trim();
+  const box=$('trainResult');
+  if(!kw){box.innerHTML='<div class="gempty">请先填车次号</div>';return}
+  box.innerHTML='<div class="gempty">查询中…</div>';
+  try{
+    const r=await fetch('/api/graph/train?code='+encodeURIComponent(kw)).then(r=>r.json());
+    if(r.error){box.innerHTML=`<div class="gempty">${r.error}</div>`;return}
+    if(!r.stops.length){box.innerHTML=`<div class="gempty">归档里没有 ${kw}。可能还没爬到，换个车次或先爬取。</div>`;return}
+    box.innerHTML=r.stops.map((s,i)=>{
+      const arr=s.arrive&&s.arrive!=='----'?s.arrive:'';
+      const dep=s.depart&&s.depart!=='----'?s.depart:'';
+      const timeTxt=(arr?`${arr}<em>到</em>`:'<em style="color:var(--ok)">始发</em>')+
+                    (dep?`${dep}<em>发</em>`:'<em style="color:var(--ok)">终到</em>');
+      return `<div class="gstop">
+        <span class="i">${i+1}</span>
+        <span class="nm">${s.name||s.code}</span>
+        <span class="tm">${timeTxt}</span>
+      </div>`;
+    }).join('');
+  }catch(e){box.innerHTML='<div class="gempty">网络错误</div>'}
+};
+$('gtrain').addEventListener('keydown',e=>{if(e.key==='Enter')$('gtrainGo').click()});
+
+// 查车站过路车
+$('gstationGo').onclick=async()=>{
+  const kw=$('gstation').value.trim();
+  const box=$('stationResult');
+  if(!kw){box.innerHTML='<div class="gempty">请先填车站名</div>';return}
+  box.innerHTML='<div class="gempty">查询中…</div>';
+  try{
+    const r=await fetch('/api/graph/station?q='+encodeURIComponent(kw)).then(r=>r.json());
+    if(r.error){box.innerHTML=`<div class="gempty">${r.error}</div>`;return}
+    if(!r.trains.length){
+      box.innerHTML=`<div class="gempty">归档里没有经过「${r.station.name}」的车。这个站可能还没爬到。</div>`;return;
+    }
+    box.innerHTML=`<div class="grow-line"><div><b>${r.station.name}</b>
+      <div class="sub">${r.station.code} · 共 ${r.count} 趟</div></div></div>`+
+      r.trains.map(x=>`<div class="grow-line"><div><b>${x.code}</b></div></div>`).join('');
+  }catch(e){box.innerHTML='<div class="gempty">网络错误</div>'}
+};
+$('gstation').addEventListener('keydown',e=>{if(e.key==='Enter')$('gstationGo').click()});
+
 $('gcrawl').onclick=async()=>{
   let gmax=parseInt(($('gmax').value||'').trim(),10);
   if(!(gmax===0||(gmax>=10&&gmax<=5000))){alert('限次请填 0（无限）或 10~5000');return}
@@ -923,8 +1108,8 @@ $('gcrawl').onclick=async()=>{
       if(st.state==='done'){clearInterval(crawlTimer);crawlTimer=null;window._crawlJob=null;
         $('gcrawl').hidden=false;$('gcancel').hidden=true;$('gfill').classList.remove('ind');
         const r=st.result||{};
-        $('gmsg').textContent=`爬完：本次 ${r.requests||'?'} 次请求，最快间隔 ${r.min_interval||'?'} 秒、退避 ${r.backoffs||0} 次，图里共 ${r.trains||'?'} 趟车`;
-        loadGraphStats()}
+        $('gmsg').textContent=`爬完：本次 ${r.requests||'?'} 次请求，新增 ${r.new_trains||0} 趟车，最快间隔 ${r.min_interval||'?'} 秒、退避 ${r.backoffs||0} 次，图里共 ${r.trains||'?'} 趟车`;
+        loadGraphStats(); loadRuns();}
       else if(st.state==='error'||st.state==='cancelled'){clearInterval(crawlTimer);crawlTimer=null;window._crawlJob=null;
         $('gcrawl').hidden=false;$('gcancel').hidden=true;$('gfill').classList.remove('ind');$('gfill').style.width='0%';
         $('gmsg').textContent='爬取结束：'+(st.error||st.state);loadGraphStats()}

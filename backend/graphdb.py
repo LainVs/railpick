@@ -149,21 +149,30 @@ def reset_ods(con):
         con.commit()
 
 
-def log_run(con, requests, new_trains, priority=""):
+def log_run(con, requests, new_trains, priority="", day=""):
+    """写一条爬取归档。day = 本次爬的乘车日期（时刻表按日期抓，归档要对得上）."""
     with _lock:
         import datetime as _dt
-        con.execute("INSERT INTO crawl_runs(ts, requests, new_trains, priority) VALUES(?,?,?,?)",
-                    (_dt.datetime.now().strftime("%m-%d %H:%M"), requests, new_trains,
-                     ",".join(priority) if isinstance(priority, list) else str(priority or "")))
+        cols = [r[1] for r in con.execute("PRAGMA table_info(crawl_runs)").fetchall()]
+        if "day" not in cols:  # 老库自动补列
+            con.execute("ALTER TABLE crawl_runs ADD COLUMN day TEXT")
+        con.execute("INSERT INTO crawl_runs(ts, requests, new_trains, priority, day)"
+                    " VALUES(?,?,?,?,?)",
+                    (_dt.datetime.now().strftime("%Y-%m-%d %H:%M"), requests, new_trains,
+                     ",".join(priority) if isinstance(priority, list) else str(priority or ""),
+                     day or ""))
         con.commit()
 
 
 def recent_runs(con, limit=10):
+    """最近几次爬取：[(ts, requests, new_trains, priority, day)]."""
     with _lock:
+        cols = [r[1] for r in con.execute("PRAGMA table_info(crawl_runs)").fetchall()]
+        sel = "ts, requests, new_trains, priority, day" if "day" in cols else \
+              "ts, requests, new_trains, priority, '' AS day"
         rows = con.execute(
-            "SELECT ts, requests, new_trains, priority FROM crawl_runs"
-            " ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-    return [(r["ts"], r["requests"], r["new_trains"], r["priority"]) for r in rows]
+            "SELECT " + sel + " FROM crawl_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [(r["ts"], r["requests"], r["new_trains"], r["priority"], r["day"] or "") for r in rows]
 
 
 def meta_get(con, k, default=None):
