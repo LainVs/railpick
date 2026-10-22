@@ -31,6 +31,14 @@ def crawl_date():
     return (date.today() + timedelta(days=2)).isoformat()
 
 
+class Throttled(Exception):
+    """被 12306 接口级限流（返回 HTML 拦截页，不是普通网络错误）.
+
+    实测：触发后余票接口会封很久（>25 分钟），期间 init 页和车站列表仍正常。
+    遇到它应该立刻停止本次爬取，而不是继续重试（继续打只会拖长封禁）。
+    """
+
+
 def seed_ods():
     return build_ods()
 
@@ -122,6 +130,16 @@ class RateController:
     12306 黑名单——真买票的时候被封就搞笑了。让系统自己摸安全速率：
     下限 1.5s（保守红线，不再往下探），上限 30s。每次跑完把速率存库，
     下次接着来。统计里会告诉你本次最快到多少、有没有被退避过。
+
+    ---- 2026-10 实测（TSP->BJP 等 6 组真实 OD，每次换日期避开本地缓存）----
+      间隔 1.5s : 8/8 成功
+      间隔 1.0s : 8/8 成功
+      间隔 0.6s : 4/8 成功（开始返回 HTML 拦截页）
+      间隔 0.35s: 0/8 成功
+    结论：安全边界在 1.0~0.6s 之间。但一旦触发限流，**余票接口会被封很久**
+    （实测 25 分钟以上仍未解封，而 init 页/车站列表仍正常，是接口级封禁），
+    且封禁期间无法查询余票，只能干等。所以下限仍取 1.5s：
+    用 50% 的速度换“基本不会被封”，对低频查询工具是划算的。
     """
 
     def __init__(self, cur=4.0, lo=1.5, hi=30.0):
@@ -131,6 +149,8 @@ class RateController:
         self.min_seen = self.cur
 
     def wait(self):
+        # 实际间隔 = cur + 0~1s 抖动。抖动是刻意的：固定节奏更容易被识别。
+        # 注意统计里报的 cur 是“基准间隔”，真实间隔比它多约 0.5s。
         time.sleep(self.cur + random.uniform(0, 1))
         self.min_seen = min(self.min_seen, self.cur)
         return self.cur
@@ -180,8 +200,13 @@ def crawl_step(con, frm, too, day, rc, budget, should_stop=None, on_beat=None, b
         used += 1
         trains, _ = api.query_tickets(frm, too, day, retries=1)
         rc.ok()
-    except Exception:
+    except Exception as e:
         rc.fail()
+        # 关键：把“被限流”与普通网络错误分开。限流会持续很久（实测 >25 分钟），
+        # 继续跑只会白白累积失败次数，还可能延长封禁。
+        msg = str(e)
+        if "非JSON" in msg or "HTML" in msg or "限流" in msg or "空响应" in msg:
+            raise Throttled(f"{frm}→{too} 被限流：{msg[:120]}") from e
         return used, fresh, False, False, recent
     done_all = True
     for t in trains:
@@ -280,6 +305,7 @@ def run(db_path=None, max_requests=1000, interval=4.0, day=None, on_progress=Non
     cap = max_requests if (max_requests or 0) > 0 else float("inf")  # 0 = 无限：啃完就开新一轮
     used_total, fresh_total, fails = 0, 0, 0
     recent_all = []
+    throttled_msg = ""
     prio = resolve_codes(priority_from)
     mesh = build_ods(prio)
     fan = []
@@ -312,9 +338,19 @@ def run(db_path=None, max_requests=1000, interval=4.0, day=None, on_progress=Non
                 on_progress(min(_beat_base[0] + u, cap) if cap != float("inf") else _beat_base[0] + u,
                             max_requests, f"{_od[0]}→{_od[1]} 采集中…间隔{rc.cur:.1f}s")
 
-        used, fresh, ok, _, recent = crawl_step(con, frm, too, day, rc,
-                                                cap - used_total, should_stop,
-                                                on_beat=beat2)
+        try:
+            used, fresh, ok, _, recent = crawl_step(con, frm, too, day, rc,
+                                                    cap - used_total, should_stop,
+                                                    on_beat=beat2)
+        except Throttled as e:
+            # 被接口级限流：立刻停，别继续打（继续打会拖长封禁）。
+            # 已入库的车次保留，归档照写。
+            used_total += 1
+            throttled_msg = str(e)
+            if on_progress:
+                on_progress(used_total, max_requests,
+                            "已被 12306 限流，本次停止（已入库数据保留）")
+            break
         used_total += used
         fresh_total += fresh
         fails = 0 if ok else fails + 1
@@ -342,6 +378,9 @@ def run(db_path=None, max_requests=1000, interval=4.0, day=None, on_progress=Non
     st.update({"requests": used_total, "new_trains": fresh_total,
                "min_interval": round(rc.min_seen, 1), "backoffs": rc.backoffs,
                "priority": prio})
+    if throttled_msg:
+        st["throttled"] = True
+        st["throttled_msg"] = throttled_msg
     return st
 
 
